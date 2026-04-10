@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS events (
     data TEXT NOT NULL,
     guild_id TEXT,
     channel_id TEXT,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_events_target ON events(target_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type, timestamp);
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS profile_snapshots (
     accent_color INTEGER,
     connected_accounts TEXT,
     mutual_guilds TEXT,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_target ON profile_snapshots(target_id, timestamp);
 
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS presence_sessions (
     start_time INTEGER NOT NULL,
     end_time INTEGER,
     duration_ms INTEGER,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_presence_target ON presence_sessions(target_id, start_time);
 
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS activity_sessions (
     end_time INTEGER,
     duration_ms INTEGER,
     metadata TEXT,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_activity_target ON activity_sessions(target_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_activity_name ON activity_sessions(activity_name, start_time);
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS voice_sessions (
     server_deaf INTEGER DEFAULT 0,
     streaming INTEGER DEFAULT 0,
     co_participants TEXT,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_voice_target ON voice_sessions(target_id, start_time);
 
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS messages (
     emoji_count INTEGER,
     mention_count INTEGER,
     link_count INTEGER,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_messages_target ON messages(target_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS typing_events (
     timestamp INTEGER NOT NULL,
     resulted_in_message INTEGER DEFAULT 0,
     message_delay_ms INTEGER,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_typing_target ON typing_events(target_id, timestamp);
 
@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS reactions (
     is_custom INTEGER DEFAULT 0,
     added_at INTEGER NOT NULL,
     removed_at INTEGER,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_reactions_target ON reactions(target_id, added_at);
 
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS guild_member_events (
     timestamp INTEGER NOT NULL,
     old_value TEXT,
     new_value TEXT,
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS alert_rules (
@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS daily_summaries (
     last_seen INTEGER,
     peak_hour INTEGER,
     UNIQUE(target_id, date),
-    FOREIGN KEY (target_id) REFERENCES targets(user_id)
+    FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_daily_target ON daily_summaries(target_id, date);
 
