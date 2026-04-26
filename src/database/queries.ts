@@ -299,6 +299,18 @@ function prepareStatements() {
         hasBackfillData: db.prepare(
             "SELECT COUNT(*) as count FROM backfill_progress WHERE target_id = ?"
         ),
+        resetAllBackfillForTarget: db.prepare(
+            `UPDATE backfill_progress
+             SET status = 'pending', messages_found = 0, oldest_message_id = NULL,
+                 started_at = NULL, completed_at = NULL, error = NULL
+             WHERE target_id = ?`
+        ),
+        deleteAllBackfillForTarget: db.prepare(
+            "DELETE FROM backfill_progress WHERE target_id = ?"
+        ),
+        getKnownGuildsForTarget: db.prepare(
+            "SELECT DISTINCT guild_id FROM backfill_progress WHERE target_id = ?"
+        ),
 
         // ── Message categories ─────────────────────────────────────────────────
         insertMessageCategory: db.prepare(

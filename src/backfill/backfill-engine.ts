@@ -275,6 +275,101 @@ export async function startBackfillForTarget(targetId: string): Promise<void> {
     }
 }
 
+// ── Custom / forced backfill ──────────────────────────────────────────────────
+
+export type BackfillMode = "new_channels" | "full_reset";
+
+/**
+ * Trigger a backfill with explicit control over what gets re-run.
+ *
+ * new_channels — Always re-fetches the Discord profile (picks up newly joined
+ *                mutual servers). Adds any guild/channel rows that aren't already
+ *                tracked. Existing completed/failed channels are left as-is so
+ *                only genuinely new channels are processed.
+ *
+ * full_reset   — Re-fetches the Discord profile, then resets EVERY channel row
+ *                for this target back to pending (clears cursors and counters),
+ *                and rescans everything from scratch.
+ */
+export async function customBackfillForTarget(
+    targetId: string,
+    mode: BackfillMode
+): Promise<void> {
+    if (!config.backfillEnabled) {
+        log.info(`Backfill disabled globally — custom backfill skipped for ${targetId}`);
+        return;
+    }
+
+    if (activeBackfills.has(targetId)) {
+        log.warn(`Backfill already running for ${targetId} — cannot start custom job`);
+        throw new Error("A backfill is already running for this target");
+    }
+
+    resumeBackfill(targetId);
+    activeBackfills.add(targetId);
+    log.info(`Custom backfill (${mode}) started for ${targetId}`);
+
+    try {
+        const stmts = getStmts();
+
+        // Always re-fetch the profile so newly joined mutual servers are included.
+        const freshGuilds = await fetchAndStoreProfile(targetId);
+        if (freshGuilds === null) {
+            throw new Error("Could not fetch Discord profile — no mutual servers available");
+        }
+
+        const allGuildIds = freshGuilds
+            .map((g: any) => (typeof g === "string" ? g : g.id))
+            .filter(Boolean) as string[];
+
+        if (!allGuildIds.length) {
+            log.warn(`No mutual guilds for ${targetId} — custom backfill finished with nothing to do`);
+            return;
+        }
+
+        if (mode === "full_reset") {
+            // Wipe all existing progress rows so every channel is rescanned from the top.
+            stmts.resetAllBackfillForTarget.run(targetId);
+            log.info(`full_reset: cleared all backfill rows for ${targetId}`);
+        } else {
+            // new_channels: figure out which guilds aren't tracked yet.
+            const knownRows = stmts.getKnownGuildsForTarget.all(targetId) as { guild_id: string }[];
+            const knownGuildIds = new Set(knownRows.map(r => r.guild_id));
+            const newGuildIds = allGuildIds.filter(id => !knownGuildIds.has(id));
+
+            if (!newGuildIds.length) {
+                log.info(`new_channels: no new guilds found for ${targetId} — nothing to add`);
+                return;
+            }
+
+            log.info(`new_channels: ${newGuildIds.length} new guild(s) for ${targetId}: ${newGuildIds.join(", ")}`);
+            // Only process the new guilds — existing completed channels are untouched.
+            for (let i = 0; i < newGuildIds.length; i += MAX_CONCURRENT_GUILDS) {
+                if (pausedTargets.has(targetId)) break;
+                const batch = newGuildIds.slice(i, i + MAX_CONCURRENT_GUILDS);
+                await Promise.all(batch.map((gid: string) => processGuild(targetId, gid)));
+            }
+            log.info(`Custom backfill (new_channels) complete for ${targetId}`);
+            return;
+        }
+
+        // full_reset path: process every guild.
+        for (let i = 0; i < allGuildIds.length; i += MAX_CONCURRENT_GUILDS) {
+            if (pausedTargets.has(targetId)) break;
+            const batch = allGuildIds.slice(i, i + MAX_CONCURRENT_GUILDS);
+            await Promise.all(batch.map((gid: string) => processGuild(targetId, gid)));
+        }
+
+        log.info(`Custom backfill (full_reset) complete for ${targetId}`);
+
+    } catch (err: any) {
+        log.error(`Custom backfill error for ${targetId}: ${err.message}`);
+        throw err;
+    } finally {
+        activeBackfills.delete(targetId);
+    }
+}
+
 // ── Startup: backfill targets with no existing progress data ─────────────────
 
 export async function startBackfillOnStartup(): Promise<void> {

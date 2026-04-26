@@ -4,6 +4,8 @@ import {
     startBackfillForTarget,
     pauseBackfill,
     resumeBackfill,
+    customBackfillForTarget,
+    type BackfillMode,
 } from "../../backfill/backfill-engine";
 
 export function registerBackfillRoutes(app: FastifyInstance): void {
@@ -45,6 +47,22 @@ export function registerBackfillRoutes(app: FastifyInstance): void {
 
             reply.code(202);
             return { accepted: true, message: "Backfill started" };
+        }
+    );
+
+    app.post<{ Params: { userId: string }; Body: { mode?: BackfillMode } }>(
+        "/api/targets/:userId/backfill/custom",
+        async (req, reply) => {
+            const { userId } = req.params;
+            const mode: BackfillMode = req.body?.mode === "full_reset" ? "full_reset" : "new_channels";
+            const stmts = getStmts();
+            const target = stmts.getTarget.get(userId) as any;
+            if (!target) return reply.code(404).send({ error: "Target not found" });
+
+            customBackfillForTarget(userId, mode).catch(() => { });
+
+            reply.code(202);
+            return { accepted: true, message: `Custom backfill (${mode}) started` };
         }
     );
 
