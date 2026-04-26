@@ -57,8 +57,17 @@ export const config = {
     ),
 
     // ── AI Provider ───────────────────────────────────────────────────────────
-    aiProvider:            (process.env.AI_PROVIDER || "none") as "none" | "ollama" | "openai" | "anthropic",
-    aiModel:               process.env.AI_MODEL || "llama3.2",
+    //
+    //   none      – Disables all AI analysis. Default.
+    //   ollama    – Local LLM via Ollama (free, private, requires running PC).
+    //   openai    – OpenAI API (pay-per-token).
+    //   anthropic – Anthropic Claude API (pay-per-token).
+    //   gemini    – Google Gemini API (free tier: 15 RPM / 1M tokens per day).
+    //               Get a free key at https://aistudio.google.com
+    //               Recommended model: gemini-2.0-flash
+    //
+    aiProvider:            (process.env.AI_PROVIDER || "none") as "none" | "ollama" | "openai" | "anthropic" | "gemini",
+    aiModel:               process.env.AI_MODEL || "gemini-2.0-flash",
     aiApiKey:              process.env.AI_API_KEY || "",
     aiBaseUrl:             process.env.AI_BASE_URL || "http://localhost:11434/v1",
     aiAnalysisIntervalMs:  parseInt(process.env.AI_ANALYSIS_INTERVAL_MS || "86400000", 10),
@@ -88,5 +97,11 @@ export function validateConfig(): void {
             throw new Error(`DB_MODE="${config.dbMode}" requires SUPABASE_URL`);
         if (!config.supabaseServiceKey)
             throw new Error(`DB_MODE="${config.dbMode}" requires SUPABASE_SERVICE_KEY`);
+    }
+
+    if (config.aiProvider !== "none" && !config.aiApiKey) {
+        if (config.aiProvider !== "ollama") {
+            throw new Error(`AI_PROVIDER="${config.aiProvider}" requires AI_API_KEY`);
+        }
     }
 }
