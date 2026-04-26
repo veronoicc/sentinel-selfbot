@@ -48,6 +48,14 @@ function applyMigration(version: number): void {
             log.info("Migration v2: alert_rules columns added");
             break;
         }
+        case 3: {
+            const db = getDb();
+            try {
+                db.exec("ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'live'");
+            } catch { /* column may already exist */ }
+            log.info("Migration v3: messages.source column added");
+            break;
+        }
         default:
             break;
     }

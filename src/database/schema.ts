@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const CREATE_TABLES_SQL = `
 -- Core tables
@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS messages (
     emoji_count INTEGER,
     mention_count INTEGER,
     link_count INTEGER,
+    source TEXT NOT NULL DEFAULT 'live',
     FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_messages_target ON messages(target_id, created_at);

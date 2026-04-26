@@ -193,7 +193,10 @@ function setupGatewayHandlers(client: GatewayClient): void {
                     const authorId = data.author?.id;
                     if (!authorId || !isTarget(authorId)) break;
                     if (data.author.bot) break;
-                    handleMessageCreate(authorId, data, data.guild_id || null);
+                    log.info(`MESSAGE_CREATE from tracked target ${authorId} in guild ${data.guild_id || "DM"}`);
+                    const msgEventData = handleMessageCreate(authorId, data, data.guild_id || null, "live");
+                    // evaluateEvent uses the processed camelCase eventData, not the raw Discord payload
+                    evaluateEvent("MESSAGE_CREATE", authorId, msgEventData);
                     pushEvent(authorId, "MESSAGE_CREATE", data);
                     break;
                 }

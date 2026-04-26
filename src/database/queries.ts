@@ -105,8 +105,8 @@ function prepareStatements() {
              (message_id, target_id, channel_id, guild_id, content, content_length,
               attachment_count, embed_count, has_sticker, is_reply,
               reply_to_user_id, reply_to_message_id, created_at,
-              word_count, emoji_count, mention_count, link_count)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              word_count, emoji_count, mention_count, link_count, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ),
         updateMessageEdited: db.prepare(
             "UPDATE messages SET content = ?, content_length = ?, edited_at = ?, edit_history = ? WHERE message_id = ?"

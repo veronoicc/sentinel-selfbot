@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { getStmts } from "../../database/queries";
 import { reloadRules } from "../../alerts/engine";
+import { config } from "../../utils/config";
 
 export function registerAlertRoutes(app: FastifyInstance): void {
 
@@ -103,5 +104,56 @@ export function registerAlertRoutes(app: FastifyInstance): void {
         stmts.unsuppressAlertRule.run(id);
         reloadRules();
         return { success: true };
+    });
+
+    // ── Webhook test ──────────────────────────────────────────────────────────
+    // POST /api/alerts/test  — sends a test payload to ALERT_WEBHOOK_URL.
+    // Use this to verify the URL is reachable before waiting for a real event.
+    app.post("/api/alerts/test", async (_req, reply) => {
+        if (!config.alertWebhookUrl) {
+            return reply.code(400).send({
+                success: false,
+                error: "ALERT_WEBHOOK_URL is not set in environment variables",
+            });
+        }
+
+        const isDiscord =
+            /https?:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\//i.test(
+                config.alertWebhookUrl
+            );
+
+        const body = isDiscord
+            ? JSON.stringify({ content: "**[SENTINEL TEST]** Webhook delivery test — alert system is working.", username: "Sentinel" })
+            : JSON.stringify({ event: "test", message: "Webhook delivery test — alert system is working.", timestamp: Date.now() });
+
+        try {
+            const res = await fetch(config.alertWebhookUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body,
+            });
+
+            const text = await res.text().catch(() => "");
+            if (!res.ok) {
+                return reply.code(502).send({
+                    success: false,
+                    error: `Webhook returned HTTP ${res.status}`,
+                    body: text.slice(0, 500),
+                    webhookType: isDiscord ? "discord" : "generic",
+                });
+            }
+
+            return {
+                success: true,
+                webhookType: isDiscord ? "discord" : "generic",
+                httpStatus: res.status,
+            };
+        } catch (err: any) {
+            return reply.code(502).send({
+                success: false,
+                error: err.message,
+                webhookType: isDiscord ? "discord" : "generic",
+            });
+        }
     });
 }

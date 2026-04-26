@@ -115,10 +115,10 @@ async function processChannel(
             const messages = await res.json() as any[];
             if (!messages.length) break;
 
-            // Filter to target's messages and insert
+            // Filter to target's messages and insert (source='backfilled' suppresses alert evaluation)
             for (const msg of messages) {
                 if (msg.author?.id === targetId) {
-                    handleMessageCreate(targetId, msg, guildId);
+                    handleMessageCreate(targetId, msg, guildId, "backfilled");
                     messagesFound++;
                 }
             }

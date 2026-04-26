@@ -725,3 +725,16 @@ CREATE INDEX IF NOT EXISTS idx_msg_cat_target
     ON public.message_categories (target_id, category);
 
 ALTER TABLE public.message_categories DISABLE ROW LEVEL SECURITY;
+
+
+-- =============================================================================
+-- SCHEMA v3 ADDITIONS
+-- =============================================================================
+
+-- ── messages — source column (distinguishes live gateway vs backfilled history) ─
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='source') THEN
+        ALTER TABLE public.messages ADD COLUMN source TEXT NOT NULL DEFAULT 'live';
+    END IF;
+END $$;

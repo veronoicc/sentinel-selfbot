@@ -1,7 +1,6 @@
 import { createLogger } from "../utils/logger";
 import { getStmts } from "../database/queries";
 import { resolveTypingWithMessage } from "./typing";
-import { evaluateEvent } from "../alerts/engine";
 
 const log = createLogger("Message");
 
@@ -25,7 +24,7 @@ function analyzeContent(content: string) {
     };
 }
 
-export function handleMessageCreate(targetId: string, message: any, guildId: string | null): void {
+export function handleMessageCreate(targetId: string, message: any, guildId: string | null, source: "live" | "backfilled" = "live"): string {
     const stmts = getStmts();
     const now = Date.now();
     const content = (message.content || "").substring(0, 2000);
@@ -56,7 +55,8 @@ export function handleMessageCreate(targetId: string, message: any, guildId: str
         analysis.wordCount,
         analysis.emojiCount,
         analysis.mentionCount,
-        analysis.linkCount
+        analysis.linkCount,
+        source
     );
 
     const eventData = JSON.stringify({
@@ -72,13 +72,11 @@ export function handleMessageCreate(targetId: string, message: any, guildId: str
     });
     stmts.insertEvent.run(targetId, "MESSAGE_CREATE", createdAt, eventData, guildId, message.channel_id);
 
-    // Evaluate alerts with properly shaped camelCase data (not raw Discord payload)
-    evaluateEvent("MESSAGE_CREATE", targetId, eventData, createdAt);
-
     // Resolve typing ghost detection
     resolveTypingWithMessage(targetId, message.channel_id);
 
-    log.debug(`${targetId}: message in ${message.channel_id} (${analysis.wordCount} words)`);
+    log.debug(`${targetId}: ${source} message in ${message.channel_id} (${analysis.wordCount} words)`);
+    return eventData;
 }
 
 export function handleMessageUpdate(targetId: string, message: any, guildId: string | null): void {

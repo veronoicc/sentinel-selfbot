@@ -40,15 +40,32 @@ export function registerStatusRoutes(app: FastifyInstance): void {
     });
 
     // Messages routes
-    app.get<{ Params: { userId: string }; Querystring: { channelId?: string; since?: string; until?: string; limit?: string; offset?: string; search?: string } }>("/api/targets/:userId/messages", async (req) => {
-        const stmts = getStmts();
+    app.get<{ Params: { userId: string }; Querystring: { channelId?: string; guildId?: string; since?: string; until?: string; limit?: string; offset?: string; search?: string; source?: string } }>("/api/targets/:userId/messages", async (req) => {
+        const db = getDb();
         const { userId } = req.params;
-        const { search, limit, offset } = req.query;
+        const { search, limit: limitStr, offset: offsetStr, channelId, guildId, since, until, source } = req.query;
+        const limit  = parseInt(limitStr  || "100");
+        const offset = parseInt(offsetStr || "0");
 
         if (search) {
-            return stmts.searchMessages.all(userId, `%${search}%`, parseInt(limit || "100"));
+            let sql = "SELECT * FROM messages WHERE target_id = ? AND content LIKE ?";
+            const params: any[] = [userId, `%${search}%`];
+            if (source) { sql += " AND source = ?"; params.push(source); }
+            sql += " ORDER BY created_at DESC LIMIT ?";
+            params.push(limit);
+            return db.prepare(sql).all(...params);
         }
-        return stmts.getMessagesByTarget.all(userId, parseInt(limit || "100"), parseInt(offset || "0"));
+
+        let sql = "SELECT * FROM messages WHERE target_id = ?";
+        const params: any[] = [userId];
+        if (channelId) { sql += " AND channel_id = ?"; params.push(channelId); }
+        if (guildId)   { sql += " AND guild_id = ?";   params.push(guildId); }
+        if (since)     { sql += " AND created_at >= ?"; params.push(parseInt(since)); }
+        if (until)     { sql += " AND created_at <= ?"; params.push(parseInt(until)); }
+        if (source)    { sql += " AND source = ?";      params.push(source); }
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+        params.push(limit, offset);
+        return db.prepare(sql).all(...params);
     });
 
     app.get<{ Params: { userId: string }; Querystring: { limit?: string; offset?: string } }>("/api/targets/:userId/messages/deleted", async (req) => {
