@@ -13,7 +13,9 @@ const log = createLogger("SocialGraphAI");
 
 const SYSTEM_PROMPT =
     "You are a behavioral intelligence analyst. You classify relationships between Discord users based " +
-    "on structural interaction data only. You never guess at message content. Respond with valid JSON only.";
+    "on structural interaction data only. You never guess at message content. " +
+    "You MUST respond with a single valid JSON object and nothing else. " +
+    "No markdown, no code fences, no trailing commas, no comments. Only raw JSON.";
 
 const CONVERSATION_GAP_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -204,6 +206,56 @@ function computeRelationshipFeatures(
     };
 }
 
+// ── Valid classifications ─────────────────────────────────────────────────────
+
+const VALID_CLASSIFICATIONS = new Set([
+    "casual_acquaintance",
+    "regular_friend",
+    "close_friend",
+    "potential_romantic_interest",
+    "group_friend",
+    "server_contact",
+    "conflict_relationship",
+    "unknown",
+]);
+
+// ── Safe JSON parse for LLM output ───────────────────────────────────────────
+
+/**
+ * Parse the LLM classification response. Returns a safe fallback object if
+ * the response cannot be parsed after all repair attempts, so a single bad
+ * response never aborts the entire analysis run.
+ */
+function parseLLMClassification(raw: string): {
+    classification: string;
+    reasoning: string[];
+} {
+    try {
+        const result = extractJsonObject(raw);
+
+        const classification =
+            typeof result.classification === "string" &&
+            VALID_CLASSIFICATIONS.has(result.classification)
+                ? result.classification
+                : "unknown";
+
+        const reasoning = Array.isArray(result.reasoning)
+            ? (result.reasoning as unknown[])
+                  .filter((r): r is string => typeof r === "string")
+                  .slice(0, 5)
+            : [];
+
+        return { classification, reasoning };
+    } catch (parseErr: any) {
+        // Log the raw output to help diagnose repeated failures
+        log.warn(
+            `LLM response JSON parse failed: ${parseErr.message} ` +
+            `— raw (first 300 chars): ${raw.slice(0, 300).replace(/\n/g, " ")}`
+        );
+        return { classification: "unknown", reasoning: [] };
+    }
+}
+
 // ── Per-target analysis ───────────────────────────────────────────────────────
 
 async function analyzeAllRelationships(targetId: string): Promise<void> {
@@ -231,12 +283,12 @@ async function analyzeAllRelationships(targetId: string): Promise<void> {
             if (confidence >= 0.2 && ai.isAvailable()) {
                 try {
                     const prompt = relationshipClassificationPrompt(features);
-                    const raw = await ai.complete(SYSTEM_PROMPT, prompt, 2048);
-                    const result = extractJsonObject(raw);
-                    classification = (result.classification as string) || "unknown";
-                    reasoning = Array.isArray(result.reasoning) ? result.reasoning as string[] : [];
+                    const raw = await ai.complete(SYSTEM_PROMPT, prompt, 512);
+                    const parsed = parseLLMClassification(raw);
+                    classification = parsed.classification;
+                    reasoning = parsed.reasoning;
                 } catch (err: any) {
-                    log.warn(`LLM classification failed for ${targetId}↔${otherUserId}: ${err.message}`);
+                    log.warn(`LLM call failed for ${targetId}↔${otherUserId}: ${err.message}`);
                     classification = "unknown";
                 }
             }
