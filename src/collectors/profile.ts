@@ -1,5 +1,6 @@
 import { createLogger } from "../utils/logger";
 import { getStmts } from "../database/queries";
+import { evaluateEvent } from "../alerts/engine";
 
 const log = createLogger("Profile");
 
@@ -61,12 +62,17 @@ export function handleProfileUpdate(targetId: string, userData: any, profileData
         if (changes.length > 0) {
             const eventData = JSON.stringify({ changes });
             stmts.insertEvent.run(targetId, "PROFILE_UPDATE", now, eventData, null, null);
+            evaluateEvent("PROFILE_UPDATE", targetId, eventData, now);
 
             if (changes.some(c => c.includes("avatar"))) {
-                stmts.insertEvent.run(targetId, "AVATAR_CHANGE", now, JSON.stringify({ oldHash: lastSnapshot?.avatar_hash, newHash: avatarHash }), null, null);
+                const avatarData = JSON.stringify({ oldHash: lastSnapshot?.avatar_hash, newHash: avatarHash });
+                stmts.insertEvent.run(targetId, "AVATAR_CHANGE", now, avatarData, null, null);
+                evaluateEvent("AVATAR_CHANGE", targetId, avatarData, now);
             }
             if (changes.some(c => c.includes("username"))) {
-                stmts.insertEvent.run(targetId, "USERNAME_CHANGE", now, JSON.stringify({ old: lastSnapshot?.username, new: username }), null, null);
+                const usernameData = JSON.stringify({ old: lastSnapshot?.username, new: username });
+                stmts.insertEvent.run(targetId, "USERNAME_CHANGE", now, usernameData, null, null);
+                evaluateEvent("USERNAME_CHANGE", targetId, usernameData, now);
             }
 
             log.info(`${targetId}: profile updated - ${changes.join(", ")}`);

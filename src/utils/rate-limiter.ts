@@ -67,31 +67,36 @@ export async function discordFetch(
     token: string,
     options: RequestInit = {}
 ): Promise<Response> {
-    await rateLimiter.waitForBucket(route);
-
     const url = route.startsWith("http") ? route : `https://discord.com/api/v10${route}`;
+    const MAX_RETRIES = 5;
 
-    const res = await fetch(url, {
-        ...options,
-        headers: {
-            Authorization: token,
-            "Content-Type": "application/json",
-            ...options.headers,
-        },
-    });
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        await rateLimiter.waitForBucket(route);
 
-    const headerObj: Record<string, string> = {};
-    res.headers.forEach((v, k) => { headerObj[k.toLowerCase()] = v; });
-    rateLimiter.updateFromHeaders(route, headerObj);
+        const res = await fetch(url, {
+            ...options,
+            headers: {
+                Authorization: token,
+                "Content-Type": "application/json",
+                ...options.headers,
+            },
+        });
 
-    if (res.status === 429) {
-        const body = await res.json() as { retry_after: number; global?: boolean };
-        const retryMs = body.retry_after * 1000;
-        log.warn(`429 on ${route}, retrying after ${retryMs}ms`);
-        rateLimiter.handleRetryAfter(retryMs, !!body.global);
-        await new Promise(resolve => setTimeout(resolve, retryMs));
-        return discordFetch(route, token, options);
+        const headerObj: Record<string, string> = {};
+        res.headers.forEach((v, k) => { headerObj[k.toLowerCase()] = v; });
+        rateLimiter.updateFromHeaders(route, headerObj);
+
+        if (res.status === 429) {
+            const body = await res.json() as { retry_after: number; global?: boolean };
+            const retryMs = body.retry_after * 1000;
+            log.warn(`429 on ${route} (attempt ${attempt + 1}/${MAX_RETRIES}), retrying after ${retryMs}ms`);
+            rateLimiter.handleRetryAfter(retryMs, !!body.global);
+            await new Promise(resolve => setTimeout(resolve, retryMs));
+            continue;
+        }
+
+        return res;
     }
 
-    return res;
+    throw new Error(`discordFetch: exceeded ${MAX_RETRIES} retries on ${route} (sustained rate-limit)`);
 }

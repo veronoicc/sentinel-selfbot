@@ -65,8 +65,10 @@ export function handleVoiceStateUpdate(targetId: string, data: any): void {
         stmts.insertEvent.run(targetId, "VOICE_MOVE", now, moveData, guildId, newChannelId);
         log.debug(`${targetId}: moved voice ${current.channelId} -> ${newChannelId}`);
 
-        // Open new session
+        // Open new session and treat destination as a join for alert purposes
         openVoiceSession(targetId, guildId, newChannelId, null, now, selfMute, selfDeaf, serverMute, serverDeaf, streaming);
+        const joinData = JSON.stringify({ guildId, channelId: newChannelId });
+        evaluateEvent("VOICE_JOIN", targetId, joinData, now);
         return;
     }
 

@@ -50,7 +50,7 @@ export async function categorizeUncategorizedBatch(targetId: string): Promise<nu
         const category = VALID_CATEGORIES.has(r.category) ? r.category : "general";
         const confidence = typeof r.confidence === "number"
             ? Math.max(0, Math.min(1, r.confidence))
-            : 1.0;
+            : 0.0; // unknown confidence — don't claim certainty
 
         // Find target_id for this message
         const msgRow = rows.find(m => m.message_id === r.id);

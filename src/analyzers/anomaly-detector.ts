@@ -1,4 +1,5 @@
 import { createLogger } from "../utils/logger";
+import { getDb } from "../database/connection";
 import { getStmts } from "../database/queries";
 import { analyzeSleepSchedule } from "./sleep-schedule";
 import { computeZScore, isAnomaly } from "./baseline";
@@ -139,18 +140,28 @@ export function detectAnomalies(targetId: string, days: number = 7): Anomaly[] {
         }
     }
 
-    // 6. Low active time anomaly (new — target has gone quiet)
-    const recentActiveMins = recentEvents
-        .filter((e: any) => e.event_type === "PRESENCE_UPDATE")
-        .length; // rough proxy
+    // 6. Low active time anomaly — use real minutes from daily_summaries (not event count)
+    const sinceDate = new Date(since).toISOString().split("T")[0];
+    const nowDate   = new Date(now).toISOString().split("T")[0];
+    const db        = getDb();
+    const activeRow = db.prepare(
+        `SELECT SUM(online_minutes + idle_minutes + dnd_minutes) AS total_minutes,
+                COUNT(*) AS day_count
+         FROM daily_summaries
+         WHERE target_id = ? AND date >= ? AND date < ?`
+    ).get(targetId, sinceDate, nowDate) as any;
 
-    if (isAnomaly(targetId, "daily_active_minutes", recentActiveMins / days)) {
-        const z = computeZScore(targetId, "daily_active_minutes", recentActiveMins / days);
+    const recentDailyMins = activeRow?.day_count
+        ? (activeRow.total_minutes || 0) / activeRow.day_count
+        : 0;
+
+    if (isAnomaly(targetId, "daily_active_minutes", recentDailyMins)) {
+        const z = computeZScore(targetId, "daily_active_minutes", recentDailyMins);
         if (z < -2) {
             anomalies.push({
                 type: "LOW_ACTIVE_TIME",
                 severity: "medium",
-                description: `Active time unusually low (z=${z.toFixed(1)}) — target may have gone quiet`,
+                description: `Active time unusually low: ~${Math.round(recentDailyMins)}min/day (z=${z.toFixed(1)}) — target may have gone quiet`,
                 timestamp: now,
             });
         }

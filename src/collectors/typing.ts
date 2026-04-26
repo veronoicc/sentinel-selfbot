@@ -1,5 +1,6 @@
 import { createLogger } from "../utils/logger";
 import { getStmts } from "../database/queries";
+import { evaluateEvent } from "../alerts/engine";
 
 const log = createLogger("Typing");
 
@@ -43,8 +44,10 @@ export function handleTypingStart(targetId: string, channelId: string, guildId: 
         pendingTyping.delete(key);
         log.debug(`${targetId}: ghost typed in ${channelId}`);
 
+        const ghostNow = Date.now();
         const eventData = JSON.stringify({ channelId, guildId, ghost: true });
-        stmts.insertEvent.run(targetId, "GHOST_TYPE", now, eventData, guildId, channelId);
+        stmts.insertEvent.run(targetId, "GHOST_TYPE", ghostNow, eventData, guildId, channelId);
+        evaluateEvent("GHOST_TYPE", targetId, eventData, ghostNow);
     }, GHOST_TIMEOUT_MS);
 
     pendingTyping.set(key, { rowId, timeout, timestamp: now });

@@ -9,6 +9,9 @@ const log = createLogger("ConnectedAccounts");
 let intervalHandle: NodeJS.Timeout | null = null;
 const POLL_INTERVAL_BASE = 1_800_000; // 30 minutes
 
+// In-memory cache: what was last observed per target (initialized from DB on first poll)
+const lastKnownAccounts = new Map<string, Map<string, any>>();
+
 async function pollTarget(targetId: string): Promise<void> {
     try {
         const res = await discordFetch(
@@ -26,13 +29,17 @@ async function pollTarget(targetId: string): Promise<void> {
         const stmts       = getStmts();
         const now         = Date.now();
 
-        const lastSnapshot = stmts.getLatestSnapshot.get(targetId) as any;
-        let oldAccounts: any[] = [];
-        if (lastSnapshot?.connected_accounts) {
-            try { oldAccounts = JSON.parse(lastSnapshot.connected_accounts); } catch { }
+        // Seed cache from DB snapshot on first poll for this target
+        if (!lastKnownAccounts.has(targetId)) {
+            const lastSnapshot = stmts.getLatestSnapshot.get(targetId) as any;
+            let seed: any[] = [];
+            if (lastSnapshot?.connected_accounts) {
+                try { seed = JSON.parse(lastSnapshot.connected_accounts); } catch { }
+            }
+            lastKnownAccounts.set(targetId, new Map(seed.map((a: any) => [a.type + ":" + (a.id || a.name), a])));
         }
 
-        const oldTypes = new Map(oldAccounts.map((a: any) => [a.type + ":" + (a.id || a.name), a]));
+        const oldTypes = lastKnownAccounts.get(targetId)!;
         const newTypes = new Map(newAccounts.map((a: any) => [a.type + ":" + (a.id || a.name), a]));
 
         for (const [key, account] of newTypes) {
@@ -62,6 +69,9 @@ async function pollTarget(targetId: string): Promise<void> {
                 log.info(`${targetId}: disconnected ${account.type} account "${account.name}"`);
             }
         }
+
+        // Update cache so next poll diffs against current state
+        lastKnownAccounts.set(targetId, newTypes);
     } catch (err: any) {
         log.error(`Connected accounts poll error for ${targetId}: ${err.message}`);
     }

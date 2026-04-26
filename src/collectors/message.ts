@@ -114,22 +114,24 @@ export function handleMessageUpdate(targetId: string, message: any, guildId: str
     log.debug(`${targetId}: edited message ${message.id} (edit #${editHistory.length})`);
 }
 
-export function handleMessageDelete(messageId: string, channelId: string, guildId: string | null): void {
+/** Returns the targetId of the deleted message, or null if not tracked. */
+export function handleMessageDelete(messageId: string, channelId: string, guildId: string | null): string | null {
     const stmts = getStmts();
     const now = Date.now();
 
     const existing = stmts.getMessage.get(messageId) as any;
-    if (existing) {
-        stmts.markMessageDeleted.run(now, messageId);
+    if (!existing) return null;
 
-        const eventData = JSON.stringify({
-            messageId,
-            channelId,
-            contentLength: existing.content_length,
-            hadContent: !!existing.content,
-        });
-        stmts.insertEvent.run(existing.target_id, "MESSAGE_DELETE", now, eventData, guildId, channelId);
+    stmts.markMessageDeleted.run(now, messageId);
 
-        log.debug(`${existing.target_id}: deleted message ${messageId}`);
-    }
+    const eventData = JSON.stringify({
+        messageId,
+        channelId,
+        contentLength: existing.content_length,
+        hadContent: !!existing.content,
+    });
+    stmts.insertEvent.run(existing.target_id, "MESSAGE_DELETE", now, eventData, guildId, channelId);
+
+    log.debug(`${existing.target_id}: deleted message ${messageId}`);
+    return existing.target_id;
 }

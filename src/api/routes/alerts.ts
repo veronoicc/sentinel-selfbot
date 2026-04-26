@@ -23,7 +23,6 @@ export function registerAlertRoutes(app: FastifyInstance): void {
         const stmts = getStmts();
 
         // Use extended insert that handles new columns
-        const db = (stmts as any).insertAlertRule.db || require("../../database/connection").getDb();
         const result = require("../../database/connection").getDb().prepare(
             `INSERT INTO alert_rules
              (target_id, rule_type, condition, enabled, created_at, digest_mode, fatigue_threshold, composite_condition)
@@ -42,19 +41,23 @@ export function registerAlertRoutes(app: FastifyInstance): void {
         return { success: true, id: Number(result.lastInsertRowid) };
     });
 
-    app.delete<{ Params: { id: string } }>("/api/alerts/rules/:id", async (req) => {
+    app.delete<{ Params: { id: string } }>("/api/alerts/rules/:id", async (req, reply) => {
+        const id = parseInt(req.params.id, 10);
+        if (isNaN(id)) return reply.code(400).send({ error: "Invalid rule id" });
         const stmts = getStmts();
-        stmts.deleteAlertRule.run(parseInt(req.params.id));
+        stmts.deleteAlertRule.run(id);
         reloadRules();
         return { success: true };
     });
 
     app.patch<{ Params: { id: string }; Body: { enabled?: boolean } }>(
         "/api/alerts/rules/:id",
-        async (req) => {
+        async (req, reply) => {
+            const id = parseInt(req.params.id, 10);
+            if (isNaN(id)) return reply.code(400).send({ error: "Invalid rule id" });
             const stmts = getStmts();
             if (req.body.enabled !== undefined) {
-                stmts.toggleAlertRule.run(req.body.enabled ? 1 : 0, parseInt(req.params.id));
+                stmts.toggleAlertRule.run(req.body.enabled ? 1 : 0, id);
                 reloadRules();
             }
             return { success: true };
@@ -78,9 +81,11 @@ export function registerAlertRoutes(app: FastifyInstance): void {
         return stmts.getAlertHistory.all(parseInt(limit || "50"), parseInt(offset || "0"));
     });
 
-    app.patch<{ Params: { id: string } }>("/api/alerts/history/:id/ack", async (req) => {
+    app.patch<{ Params: { id: string } }>("/api/alerts/history/:id/ack", async (req, reply) => {
+        const id = parseInt(req.params.id, 10);
+        if (isNaN(id)) return reply.code(400).send({ error: "Invalid alert id" });
         const stmts = getStmts();
-        stmts.acknowledgeAlert.run(parseInt(req.params.id));
+        stmts.acknowledgeAlert.run(id);
         return { success: true };
     });
 
@@ -92,8 +97,9 @@ export function registerAlertRoutes(app: FastifyInstance): void {
     });
 
     app.post<{ Params: { id: string } }>("/api/alerts/rules/:id/unsuppress", async (req, reply) => {
+        const id = parseInt(req.params.id, 10);
+        if (isNaN(id)) return reply.code(400).send({ error: "Invalid rule id" });
         const stmts = getStmts();
-        const id = parseInt(req.params.id);
         stmts.unsuppressAlertRule.run(id);
         reloadRules();
         return { success: true };

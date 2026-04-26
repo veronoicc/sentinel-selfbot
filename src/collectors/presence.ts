@@ -1,5 +1,6 @@
 import { createLogger } from "../utils/logger";
 import { getStmts } from "../database/queries";
+import { evaluateEvent } from "../alerts/engine";
 
 const log = createLogger("Presence");
 
@@ -62,6 +63,9 @@ export function handlePresenceUpdate(targetId: string, data: any): void {
         clientStatus,
     });
     stmts.insertEvent.run(targetId, "PRESENCE_UPDATE", now, eventData, null, null);
+
+    // Fire alert evaluation with collector-shaped data (engine expects newStatus/oldStatus)
+    evaluateEvent("PRESENCE_UPDATE", targetId, eventData, now);
 
     // Track platform switch
     if (oldPlatform && platform && oldPlatform !== platform) {

@@ -304,13 +304,13 @@ export function scheduleBriefGeneration(): NodeJS.Timeout {
         }
     }, 5 * 60 * 1000);
 
-    // Scheduled daily generation
+    // Scheduled daily generation — setTimeout chain avoids accumulating intervals
     const handle = setTimeout(function tick() {
         const yesterday = prevDateStr();
         generateBriefsForDate(yesterday).catch(err =>
             log.error(`Scheduled brief generation error: ${err.message}`)
         );
-        setInterval(tick, 24 * 60 * 60 * 1000);
+        setTimeout(tick, 24 * 60 * 60 * 1000);
     }, msUntilNext());
 
     log.info(`Brief generation scheduled for ${config.briefGenerationTime} daily`);

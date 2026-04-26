@@ -182,7 +182,8 @@ function setupGatewayHandlers(client: GatewayClient): void {
                     const userId = data.user?.id;
                     if (!userId || !isTarget(userId)) break;
                     handlePresenceUpdate(userId, data);
-                    if (data.activities) handleActivityUpdate(userId, data.activities);
+                    // Always pass activities array — empty array closes running sessions when user goes offline
+                    handleActivityUpdate(userId, data.activities || []);
                     pushEvent(userId, "PRESENCE_UPDATE", data);
                     break;
                 }
@@ -206,7 +207,8 @@ function setupGatewayHandlers(client: GatewayClient): void {
                 }
 
                 case "MESSAGE_DELETE": {
-                    handleMessageDelete(data.id, data.channel_id, data.guild_id || null);
+                    const deletedTargetId = handleMessageDelete(data.id, data.channel_id, data.guild_id || null);
+                    if (deletedTargetId) pushEvent(deletedTargetId, "MESSAGE_DELETE", data);
                     break;
                 }
 
@@ -367,6 +369,15 @@ function setupGatewayHandlers(client: GatewayClient): void {
 
 // ── SSE + alert forwarding ────────────────────────────────────────────────────
 
+// Event types whose alert evaluation is handled directly by their collector
+// with properly-shaped data. Calling evaluateEvent here with raw Discord
+// payloads would either mismatch field names or double-fire.
+const COLLECTOR_EVALUATED_EVENTS = new Set([
+    "PRESENCE_UPDATE",   // presence.ts — uses newStatus/oldStatus shape
+    "VOICE_STATE_UPDATE", // voice.ts — emits VOICE_JOIN/VOICE_LEAVE directly
+    "TYPING_START",       // typing.ts — GHOST_TYPE fired from timeout callback
+]);
+
 function pushEvent(targetId: string, eventType: string, data: any): void {
     const event = {
         target_id:  targetId,
@@ -375,7 +386,10 @@ function pushEvent(targetId: string, eventType: string, data: any): void {
         data,
     };
     pushSSEEvent(event);
-    evaluateEvent(eventType, targetId, JSON.stringify(data));
+    // Skip evaluateEvent for events whose collectors already call it with correct data
+    if (!COLLECTOR_EVALUATED_EVENTS.has(eventType)) {
+        evaluateEvent(eventType, targetId, JSON.stringify(data));
+    }
 }
 
 // ── Voice participant tracker ─────────────────────────────────────────────────

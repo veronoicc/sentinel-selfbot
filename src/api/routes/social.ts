@@ -66,24 +66,9 @@ export function registerSocialRoutes(app: FastifyInstance): void {
             const target = stmts.getTarget.get(userId) as any;
             if (!target) return reply.code(404).send({ error: "Target not found" });
 
-            // Fire-and-forget
-            setImmediate(async () => {
-                try {
-                    const { runAISocialGraphAnalysis: _run } = await import("../../analyzers/social-graph-ai");
-                    // Analyze just this target by temporarily narrowing scope
-                    const { buildSocialGraph } = await import("../../analyzers/social-graph");
-                    const { getStmts: gs } = await import("../../database/queries");
-                    const { ai } = await import("../../ai/provider");
-                    const { relationshipClassificationPrompt } = await import("../../ai/prompts");
-                    log.info(`Triggered manual social graph analysis for ${userId}`);
-                } catch (err: any) {
-                    log.error(`Manual analysis error: ${err.message}`);
-                }
-            });
-
-            // Simpler: just call the real function in background
-            runAISocialGraphAnalysis().catch(err =>
-                log.error(`Background analysis error: ${err.message}`)
+            // Fire-and-forget — scoped to this target only
+            runAISocialGraphAnalysis(userId).catch(err =>
+                log.error(`Background analysis error for ${userId}: ${err.message}`)
             );
 
             reply.code(202);

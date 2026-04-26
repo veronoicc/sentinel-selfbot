@@ -269,10 +269,12 @@ async function analyzeAllRelationships(targetId: string): Promise<void> {
 
 // ── Public exports ────────────────────────────────────────────────────────────
 
-export async function runAISocialGraphAnalysis(): Promise<void> {
+export async function runAISocialGraphAnalysis(targetId?: string): Promise<void> {
     const stmts = getStmts();
-    const targets = stmts.getActiveTargets.all() as any[];
-    log.info(`Running AI social graph analysis for ${targets.length} targets`);
+    const targets = targetId
+        ? [{ user_id: targetId }]
+        : stmts.getActiveTargets.all() as any[];
+    log.info(`Running AI social graph analysis for ${targets.length} target(s)`);
 
     for (const target of targets) {
         try {

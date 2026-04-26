@@ -100,7 +100,7 @@ export function evaluateEvent(
 
         if (!alertTypes.includes(rule.rule_type)) continue;
 
-        if (matchesCondition(rule, eventType, eventData, ts)) {
+        if (matchesCondition(rule, eventType, eventData, ts, targetId)) {
             routeAlert(rule, targetId, eventType, eventData);
         }
     }
@@ -134,6 +134,7 @@ function handleCompositeRule(
     }
 
     const state = targetMap.get(targetId)!;
+    let anySatisfied = false;
 
     for (const subCond of cc.conditions) {
         const condKey = JSON.stringify(subCond);
@@ -149,13 +150,18 @@ function handleCompositeRule(
         const alertTypes = EVENT_TO_ALERT_MAP[eventType];
         if (!alertTypes?.includes(subCond.rule_type)) continue;
 
-        if (matchesCondition(fakeRule, eventType, eventData, ts)) {
+        if (matchesCondition(fakeRule, eventType, eventData, ts, targetId)) {
             state.satisfiedConditions.add(condKey);
-            if (state.firstSatisfiedAt === ts) {
+            anySatisfied = true;
+            // Record the timestamp of the first satisfied condition
+            if (state.satisfiedConditions.size === 1) {
                 state.firstSatisfiedAt = ts;
             }
         }
     }
+
+    // Only evaluate completion when this event actually contributed something
+    if (!anySatisfied) return;
 
     const allSatisfied = cc.conditions.every(c =>
         state.satisfiedConditions.has(JSON.stringify(c))
@@ -178,7 +184,8 @@ function matchesCondition(
     rule: AlertRule,
     eventType: string,
     data: any,
-    eventTimestamp: number
+    eventTimestamp: number,
+    targetId: string
 ): boolean {
     const cond = rule.condition;
     const eventTime = new Date(eventTimestamp);
@@ -286,9 +293,12 @@ function matchesCondition(
         case "NEW_GAME": {
             if (eventType !== "ACTIVITY_START") return false;
             if (parsed.type !== 0) return false;
+            // Use rule target or the event's target — never bind undefined to the query
+            const queryTarget = rule.target_id || targetId;
+            if (!queryTarget) return false;
             try {
                 const stmts = getStmts();
-                const sessions = stmts.getActivitySessions.all(rule.target_id || parsed.targetId, 0, 1000) as any[];
+                const sessions = stmts.getActivitySessions.all(queryTarget, 0, 1000) as any[];
                 const playedBefore = sessions.some((s: any) =>
                     s.activity_name === parsed.name && s.start_time < Date.now() - 60000
                 );
