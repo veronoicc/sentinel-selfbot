@@ -223,6 +223,11 @@ export class GeminiProvider implements AIProvider {
                 throw new Error(`Unexpected Gemini response structure: ${JSON.stringify(data)}`);
             }
 
+            const finishReason: string | undefined = data?.candidates?.[0]?.finishReason;
+            if (finishReason === "MAX_TOKENS") {
+                throw new Error(`Gemini response truncated (MAX_TOKENS) — increase maxTokens`);
+            }
+            
             return content.trim();
         }
 
