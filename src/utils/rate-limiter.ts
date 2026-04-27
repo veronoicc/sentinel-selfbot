@@ -95,6 +95,16 @@ export async function discordFetch(
             continue;
         }
 
+        // Transient server errors — retry with backoff before giving up
+        if (res.status === 500 || res.status === 502 || res.status === 503) {
+            if (attempt < MAX_RETRIES - 1) {
+                const backoffMs = Math.min(1000 * 2 ** attempt, 30_000); // 1s, 2s, 4s, 8s, 16s
+                log.warn(`${res.status} on ${route} (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${backoffMs}ms`);
+                await new Promise(resolve => setTimeout(resolve, backoffMs));
+                continue;
+            }
+        }
+
         return res;
     }
 
