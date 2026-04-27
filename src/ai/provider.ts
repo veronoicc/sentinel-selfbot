@@ -3,6 +3,16 @@ import { createLogger } from "../utils/logger";
 
 const log = createLogger("AIProvider");
 
+// HTTP status codes that are transient and worth retrying
+const TRANSIENT_HTTP_CODES = new Set([500, 502, 503, 529]);
+// Backoff delays per attempt (attempt 1 → 10 s, attempt 2 → 30 s, attempt 3 → 60 s)
+const RETRY_BACKOFF_MS = [10_000, 30_000, 60_000];
+const MAX_RETRIES = 3;
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export interface AIProvider {
     complete(systemPrompt: string, userPrompt: string, maxTokens?: number): Promise<string>;
     isAvailable(): boolean;
@@ -19,37 +29,47 @@ export class OpenAICompatibleProvider implements AIProvider {
     isAvailable() { return true; }
 
     async complete(systemPrompt: string, userPrompt: string, maxTokens = 512): Promise<string> {
-        // Strip trailing slash to avoid double-slash in URL construction
         const baseUrl = config.aiBaseUrl.replace(/\/$/, "");
-
-        const res = await fetch(`${baseUrl}/chat/completions`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${config.aiApiKey}`,
-            },
-            body: JSON.stringify({
-                model: config.aiModel,
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: userPrompt },
-                ],
-                max_tokens: maxTokens,
-                stream: false,
-            }),
+        const body = JSON.stringify({
+            model: config.aiModel,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt },
+            ],
+            max_tokens: maxTokens,
+            stream: false,
         });
 
-        if (!res.ok) {
-            const text = await res.text().catch(() => "(no body)");
-            throw new Error(`OpenAI-compatible API error ${res.status}: ${text}`);
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            const res = await fetch(`${baseUrl}/chat/completions`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${config.aiApiKey}`,
+                },
+                body,
+            });
+
+            if (!res.ok) {
+                const text = await res.text().catch(() => "(no body)");
+                if (TRANSIENT_HTTP_CODES.has(res.status) && attempt < MAX_RETRIES) {
+                    const delayMs = RETRY_BACKOFF_MS[attempt - 1];
+                    log.warn(`OpenAI-compatible ${res.status} (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delayMs / 1000}s…`);
+                    await sleep(delayMs);
+                    continue;
+                }
+                throw new Error(`OpenAI-compatible API error ${res.status}: ${text}`);
+            }
+
+            const data = await res.json() as any;
+            const content = data?.choices?.[0]?.message?.content;
+            if (typeof content !== "string") {
+                throw new Error(`Unexpected response structure: ${JSON.stringify(data)}`);
+            }
+            return content.trim();
         }
 
-        const data = await res.json() as any;
-        const content = data?.choices?.[0]?.message?.content;
-        if (typeof content !== "string") {
-            throw new Error(`Unexpected response structure: ${JSON.stringify(data)}`);
-        }
-        return content.trim();
+        throw new Error("OpenAI-compatible: exhausted all retries");
     }
 }
 
@@ -57,32 +77,44 @@ export class AnthropicProvider implements AIProvider {
     isAvailable() { return true; }
 
     async complete(systemPrompt: string, userPrompt: string, maxTokens = 512): Promise<string> {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: {
-                "x-api-key": config.aiApiKey,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                model: config.aiModel,
-                max_tokens: maxTokens,
-                system: systemPrompt,
-                messages: [{ role: "user", content: userPrompt }],
-            }),
+        const body = JSON.stringify({
+            model: config.aiModel,
+            max_tokens: maxTokens,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }],
         });
 
-        if (!res.ok) {
-            const text = await res.text().catch(() => "(no body)");
-            throw new Error(`Anthropic API error ${res.status}: ${text}`);
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            const res = await fetch("https://api.anthropic.com/v1/messages", {
+                method: "POST",
+                headers: {
+                    "x-api-key": config.aiApiKey,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                body,
+            });
+
+            if (!res.ok) {
+                const text = await res.text().catch(() => "(no body)");
+                if (TRANSIENT_HTTP_CODES.has(res.status) && attempt < MAX_RETRIES) {
+                    const delayMs = RETRY_BACKOFF_MS[attempt - 1];
+                    log.warn(`Anthropic ${res.status} (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delayMs / 1000}s…`);
+                    await sleep(delayMs);
+                    continue;
+                }
+                throw new Error(`Anthropic API error ${res.status}: ${text}`);
+            }
+
+            const data = await res.json() as any;
+            const content = data?.content?.[0]?.text;
+            if (typeof content !== "string") {
+                throw new Error(`Unexpected Anthropic response structure: ${JSON.stringify(data)}`);
+            }
+            return content.trim();
         }
 
-        const data = await res.json() as any;
-        const content = data?.content?.[0]?.text;
-        if (typeof content !== "string") {
-            throw new Error(`Unexpected Anthropic response structure: ${JSON.stringify(data)}`);
-        }
-        return content.trim();
+        throw new Error("Anthropic: exhausted all retries");
     }
 }
 
@@ -206,6 +238,18 @@ export class GeminiProvider implements AIProvider {
                 // correctly accounts for the full delay we are about to sleep.
                 geminiLastRequestAt = Date.now() + delayMs;
                 await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+                continue;
+            }
+
+            // ── Transient server errors (503, 502, 500, 529) ──────────────
+            if (TRANSIENT_HTTP_CODES.has(res.status)) {
+                const text = await res.text().catch(() => "(no body)");
+                if (attempt === GeminiProvider.MAX_RETRIES) {
+                    throw new Error(`Gemini API error ${res.status}: ${text}`);
+                }
+                const delayMs = RETRY_BACKOFF_MS[attempt - 1];
+                log.warn(`Gemini ${res.status} transient error (attempt ${attempt}/${GeminiProvider.MAX_RETRIES}), retrying in ${delayMs / 1000}s…`);
+                await sleep(delayMs);
                 continue;
             }
 
