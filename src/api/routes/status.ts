@@ -40,10 +40,10 @@ export function registerStatusRoutes(app: FastifyInstance): void {
     });
 
     // Messages routes
-    app.get<{ Params: { userId: string }; Querystring: { channelId?: string; guildId?: string; since?: string; until?: string; limit?: string; offset?: string; search?: string; source?: string } }>("/api/targets/:userId/messages", async (req) => {
+    app.get<{ Params: { userId: string }; Querystring: { channelId?: string; guildId?: string; since?: string; until?: string; limit?: string; offset?: string; search?: string; source?: string; category?: string } }>("/api/targets/:userId/messages", async (req) => {
         const db = getDb();
         const { userId } = req.params;
-        const { search, limit: limitStr, offset: offsetStr, channelId, guildId, since, until, source } = req.query;
+        const { search, limit: limitStr, offset: offsetStr, channelId, guildId, since, until, source, category } = req.query;
         const limit  = parseInt(limitStr  || "100");
         const offset = parseInt(offsetStr || "0");
 
@@ -53,6 +53,21 @@ export function registerStatusRoutes(app: FastifyInstance): void {
             if (source) { sql += " AND source = ?"; params.push(source); }
             sql += " ORDER BY created_at DESC LIMIT ?";
             params.push(limit);
+            return db.prepare(sql).all(...params);
+        }
+
+        if (category) {
+            let sql = `SELECT m.* FROM messages m
+                       INNER JOIN message_categories mc ON mc.message_id = m.message_id
+                       WHERE m.target_id = ? AND mc.category = ?`;
+            const params: any[] = [userId, category];
+            if (channelId) { sql += " AND m.channel_id = ?";   params.push(channelId); }
+            if (guildId)   { sql += " AND m.guild_id = ?";     params.push(guildId); }
+            if (since)     { sql += " AND m.created_at >= ?";  params.push(parseInt(since)); }
+            if (until)     { sql += " AND m.created_at <= ?";  params.push(parseInt(until)); }
+            if (source)    { sql += " AND m.source = ?";       params.push(source); }
+            sql += " ORDER BY m.created_at DESC LIMIT ? OFFSET ?";
+            params.push(limit, offset);
             return db.prepare(sql).all(...params);
         }
 

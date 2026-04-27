@@ -92,16 +92,6 @@ function flushDigest(): void {
             data: { alerts: entries, windowMs: config.alertDigestIntervalMs },
         });
 
-        // Insert one alert_history row per unique alert type
-        for (const entry of entries) {
-            const digestMessage = entry.count > 1
-                ? `[DIGEST x${entry.count}] ${entry.message}`
-                : entry.message;
-            stmts.insertAlertHistory.run(
-                entry.ruleId, targetId, entry.alertType, digestMessage, now
-            );
-        }
-
         log.info(`Digest flushed for ${targetId}: ${entries.length} alert types`);
     }
 

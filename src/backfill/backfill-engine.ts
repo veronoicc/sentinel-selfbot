@@ -67,21 +67,21 @@ async function processChannel(
     const now = Date.now();
     const oldestAllowed = now - config.backfillMaxDays * 86_400_000;
 
-    // Mark in_progress
-    stmts.updateBackfillProgress.run(
-        "in_progress", 0, null, now, null, null,
-        targetId, channelId
-    );
-
     let cursor: string | null = null;
     let messagesFound = 0;
     let oldestMessageId: string | null = null;
 
-    // Resume from existing cursor if any
+    // Read existing cursor BEFORE marking in_progress — the update nulls oldest_message_id
     const existing = getDb().prepare(
         "SELECT oldest_message_id FROM backfill_progress WHERE target_id = ? AND channel_id = ?"
     ).get(targetId, channelId) as any;
     if (existing?.oldest_message_id) cursor = existing.oldest_message_id;
+
+    // Mark in_progress, preserving cursor so the row stays resumable if the process dies
+    stmts.updateBackfillProgress.run(
+        "in_progress", 0, cursor, now, null, null,
+        targetId, channelId
+    );
 
     try {
         while (true) {
