@@ -44,6 +44,8 @@ import { notifyStartup, notifyCriticalError } from "./utils/webhook-notifier";
 
 const log = createLogger("Sentinel");
 
+let startupNotificationSent = false;
+
 let gateway:                  GatewayClient | null      = null;
 let dailySummaryInterval:     NodeJS.Timeout | null      = null;
 let voiceParticipantInterval: NodeJS.Timeout | null      = null;
@@ -364,17 +366,20 @@ function setupGatewayHandlers(client: GatewayClient): void {
 
         setTimeout(() => requestInitialPresences(client), 2_000);
 
-        // C2 startup notification
-        const stmts = getStmts();
-        const targets = stmts.getAllTargets.all() as any[];
-        const ruleCount = (stmts.getAlertRules.all() as any[]).length;
-        notifyStartup({
-            guildCount,
-            targetCount:       targets.length,
-            activeTargetCount: targets.filter((t: any) => t.active).length,
-            ruleCount,
-            dbMode:            config.dbMode,
-        });
+        // C2 startup notification — only on first READY, not on reconnect re-IDENTIFYs
+        if (!startupNotificationSent) {
+            startupNotificationSent = true;
+            const stmts = getStmts();
+            const targets = stmts.getAllTargets.all() as any[];
+            const ruleCount = (stmts.getAlertRules.all() as any[]).length;
+            notifyStartup({
+                guildCount,
+                targetCount:       targets.length,
+                activeTargetCount: targets.filter((t: any) => t.active).length,
+                ruleCount,
+                dbMode:            config.dbMode,
+            });
+        }
     });
 }
 
