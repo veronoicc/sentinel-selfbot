@@ -102,6 +102,9 @@ Sentinel running AI Social Relation/Graph Analysis :
   <img src="https://github.com/Privex-chat/sentinel/blob/4dd4af3a49712f7756c9238d1fda6a1c6a3f4ca7/assets/Sentinel_AI_Social_Graph_Analyzing.PNG" alt="Selfbot collecting data" height="550" width="720">
 </p>
 
+<p align="center">
+  <b>View more:</b> <a href="https://github.com/Privex-chat/sentinel">github.com/Privex-chat/sentinel</a>
+</p>
 
 ---
 
