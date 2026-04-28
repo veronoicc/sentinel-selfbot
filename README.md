@@ -1,7 +1,6 @@
 <p align="center">
   <img src="demo.gif" alt="Selfbot collecting data" width="720">
 </p>
-Part of the [Sentinel](https://github.com/Privex-chat/sentinel) project.
 <table align="center">
   <tr>
     <td>
@@ -15,6 +14,7 @@ Part of the [Sentinel](https://github.com/Privex-chat/sentinel) project.
   </tr>
 </table>
 
+Part of the [Sentinel](https://github.com/Privex-chat/sentinel) project.
 <p align="center">
   <a href="https://github.com/Privex-chat/sentinel-selfbot"><img src="https://img.shields.io/github/stars/Privex-chat/sentinel-selfbot?style=social" alt="GitHub stars"></a>
   <a href="https://github.com/Privex-chat/sentinel-selfbot"><img src="https://img.shields.io/github/forks/Privex-chat/sentinel-selfbot?style=social" alt="GitHub forks"></a>
