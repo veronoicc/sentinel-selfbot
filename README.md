@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="https://github.com/Privex-chat/sentinel/blob/8f32961fea344aefe68157d298e1392ceeb316b5/assets/Sentinel_Logging_Targets_Messages.PNG" alt="Selfbot collecting data" height="550" width="720">
-</p>
 <table align="center">
   <tr>
     <td>
@@ -90,6 +87,13 @@ When you add a target, Sentinel immediately starts collecting future data — bu
 - **Discord webhooks** — fire alerts straight to your server
 
 All driven by the new `.env` settings below.
+
+---
+
+## Some Screenshots
+<p align="center">
+  <img src="https://github.com/Privex-chat/sentinel/blob/8f32961fea344aefe68157d298e1392ceeb316b5/assets/Sentinel_Logging_Targets_Messages.PNG" alt="Selfbot collecting data" height="550" width="720">
+</p>
 
 ---
 
