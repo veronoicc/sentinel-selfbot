@@ -97,6 +97,12 @@ Sentinel logging multiple targets messages across servers :
   <img src="https://github.com/Privex-chat/sentinel/blob/8f32961fea344aefe68157d298e1392ceeb316b5/assets/Sentinel_Logging_Targets_Messages.PNG" alt="Selfbot collecting data" height="550" width="720">
 </p>
 
+Sentinel running AI Social Relation/Graph Analysis :
+<p align="center">
+  <img src="https://github.com/Privex-chat/sentinel/blob/4dd4af3a49712f7756c9238d1fda6a1c6a3f4ca7/assets/Sentinel_AI_Social_Graph_Analyzing.PNG" alt="Selfbot collecting data" height="550" width="720">
+</p>
+
+
 ---
 
 ## ⚡ Quick Start
