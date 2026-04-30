@@ -7,6 +7,7 @@ const log = createLogger("StatusPoller");
 
 let intervalHandle: NodeJS.Timeout | null = null;
 let requestGuildMembersFn: ((guildId: string, userIds: string[]) => void) | null = null;
+let selfbotGuildsFn: (() => any[]) | null = null;
 
 export function setRequestGuildMembersFn(
     fn: (guildId: string, userIds: string[]) => void
@@ -14,9 +15,19 @@ export function setRequestGuildMembersFn(
     requestGuildMembersFn = fn;
 }
 
+/** Provide a getter for the selfbot's own guild list (from GatewayClient.getGuilds). */
+export function setSelfbotGuildsFn(fn: () => any[]): void {
+    selfbotGuildsFn = fn;
+}
+
 /**
  * Build the guild→targets map and send REQUEST_GUILD_MEMBERS for each guild,
  * staggered so we don't spike the 120 ops / 60 s gateway rate limit.
+ *
+ * NOTE: GUILD_MEMBERS_CHUNK presences only include ACTIVE (non-offline) users.
+ * Absence from a chunk does NOT mean offline, so the chunk handler in index.ts
+ * never forces a status correction based on chunk absence. This poll is purely
+ * for refreshing online status in case a PRESENCE_UPDATE was missed.
  */
 function pollPresences(): void {
     if (!requestGuildMembersFn) return;
@@ -25,8 +36,9 @@ function pollPresences(): void {
     const targets = stmts.getActiveTargets.all() as any[];
     if (targets.length === 0) return;
 
-    const guildTargetMap = new Map<string, string[]>();
+    const guildTargetMap = new Map<string, Set<string>>();
 
+    // Primary: use stored mutual_guilds from profile snapshots
     for (const target of targets) {
         const snapshot = stmts.getLatestSnapshot.get(target.user_id) as any;
         if (!snapshot?.mutual_guilds) continue;
@@ -36,15 +48,30 @@ function pollPresences(): void {
             for (const guild of guilds) {
                 const guildId: string = typeof guild === "string" ? guild : guild.id;
                 if (!guildId) continue;
-                const existing = guildTargetMap.get(guildId) || [];
-                existing.push(target.user_id);
+                const existing = guildTargetMap.get(guildId) ?? new Set();
+                existing.add(target.user_id);
                 guildTargetMap.set(guildId, existing);
             }
         } catch { /* malformed JSON — skip */ }
     }
 
+    // Fallback: targets without snapshot data get polled against all selfbot guilds
+    const selfbotGuilds: any[] = selfbotGuildsFn?.() ?? [];
+    for (const target of targets) {
+        const snapshot = stmts.getLatestSnapshot.get(target.user_id) as any;
+        if (snapshot?.mutual_guilds) continue;
+
+        for (const guild of selfbotGuilds) {
+            const guildId: string = typeof guild === "string" ? guild : guild.id;
+            if (!guildId) continue;
+            const existing = guildTargetMap.get(guildId) ?? new Set();
+            existing.add(target.user_id);
+            guildTargetMap.set(guildId, existing);
+        }
+    }
+
     if (guildTargetMap.size === 0) {
-        log.debug("No mutual guild data available for status poll (profiles may not be fetched yet)");
+        log.debug("No guild data available for status poll (profiles may not be fetched yet)");
         return;
     }
 
@@ -54,11 +81,12 @@ function pollPresences(): void {
     let delay = 0;
 
     for (const [guildId, userIds] of guildTargetMap) {
-        const d = delay;
+        const arr = Array.from(userIds);
+        const d   = delay;
         setTimeout(() => {
             if (!requestGuildMembersFn) return;
-            requestGuildMembersFn(guildId, userIds);
-            log.debug(`Status poll: requested guild members for ${guildId} (${userIds.length} target(s))`);
+            requestGuildMembersFn(guildId, arr);
+            log.debug(`Status poll: requested ${arr.length} target(s) from guild ${guildId}`);
         }, d);
         delay += withJitter(STAGGER_BASE_MS);
     }

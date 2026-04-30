@@ -26,6 +26,7 @@ import { handleChannelCreate } from "./collectors/dm-detection";
 import { startProfilePoller, stopProfilePoller } from "./pollers/profile-poller";
 import {
     startStatusPoller, stopStatusPoller, setRequestGuildMembersFn,
+    setSelfbotGuildsFn,
 } from "./pollers/status-poller";
 import { startMutualServersPoller, stopMutualServersPoller } from "./pollers/mutual-servers";
 import { startConnectedAccountsPoller, stopConnectedAccountsPoller } from "./pollers/connected-accounts";
@@ -118,8 +119,9 @@ function requestInitialPresences(client: GatewayClient): void {
     const targets = stmts.getActiveTargets.all() as any[];
     if (targets.length === 0) return;
 
-    const guildTargetMap = new Map<string, string[]>();
+    const guildTargetMap = new Map<string, Set<string>>();
 
+    // Primary: use stored mutual_guilds from profile snapshots
     for (const target of targets) {
         const snapshot = stmts.getLatestSnapshot.get(target.user_id) as any;
         if (!snapshot?.mutual_guilds) continue;
@@ -130,21 +132,38 @@ function requestInitialPresences(client: GatewayClient): void {
         for (const guild of guilds) {
             const guildId: string = typeof guild === "string" ? guild : guild.id;
             if (!guildId) continue;
-            const existing = guildTargetMap.get(guildId) || [];
-            existing.push(target.user_id);
+            const existing = guildTargetMap.get(guildId) ?? new Set();
+            existing.add(target.user_id);
+            guildTargetMap.set(guildId, existing);
+        }
+    }
+
+    // Fallback: for targets with no snapshot data, request from ALL selfbot guilds
+    // so new targets get their initial presence without waiting for a profile poll.
+    const selfbotGuilds: any[] = client.getGuilds();
+    for (const target of targets) {
+        const snapshot = stmts.getLatestSnapshot.get(target.user_id) as any;
+        if (snapshot?.mutual_guilds) continue; // already covered above
+
+        for (const guild of selfbotGuilds) {
+            const guildId: string = typeof guild === "string" ? guild : guild.id;
+            if (!guildId) continue;
+            const existing = guildTargetMap.get(guildId) ?? new Set();
+            existing.add(target.user_id);
             guildTargetMap.set(guildId, existing);
         }
     }
 
     if (guildTargetMap.size === 0) {
-        log.info("No mutual guild data yet — initial presences will arrive via PRESENCE_UPDATE events.");
+        log.info("No guild data yet — initial presences will arrive via PRESENCE_UPDATE events.");
         return;
     }
 
     const batches: { guildId: string; userIds: string[] }[] = [];
     for (const [guildId, userIds] of guildTargetMap) {
-        for (let i = 0; i < userIds.length; i += 100) {
-            batches.push({ guildId, userIds: userIds.slice(i, i + 100) });
+        const arr = Array.from(userIds);
+        for (let i = 0; i < arr.length; i += 100) {
+            batches.push({ guildId, userIds: arr.slice(i, i + 100) });
         }
     }
 
@@ -300,6 +319,11 @@ function setupGatewayHandlers(client: GatewayClient): void {
 
                 // ── Guild members chunk ────────────────────────────────────────
                 case "GUILD_MEMBERS_CHUNK": {
+                    // IMPORTANT: Discord only populates data.presences with users who
+                    // currently have an ACTIVE (non-offline) status visible in this guild.
+                    // Absence from presences does NOT mean the user is offline — they may
+                    // be online in a different guild, or have guild-specific presence hidden.
+                    // We therefore NEVER force a target to "offline" based on chunk absence.
                     const presenceMap = new Map<string, any>();
                     for (const presence of data.presences || []) {
                         const uid: string | undefined = presence.user?.id;
@@ -315,6 +339,7 @@ function setupGatewayHandlers(client: GatewayClient): void {
                         const presence = presenceMap.get(userId);
 
                         if (presence) {
+                            // User is confirmed online in this guild — update their state.
                             const existing = getCurrentPresence(userId);
                             if (!existing) {
                                 initPresence(userId, presence);
@@ -329,18 +354,19 @@ function setupGatewayHandlers(client: GatewayClient): void {
                                 }
                             }
                         } else {
+                            // User not in this chunk's presences — could be offline OR just
+                            // hidden in this guild. Only act for brand-new targets that have
+                            // no presence state at all (waiting for their first PRESENCE_UPDATE).
                             const existing = getCurrentPresence(userId);
                             if (!existing) {
+                                // First time we've seen this target — set a provisional offline
+                                // state so analytics have a starting point. A real PRESENCE_UPDATE
+                                // will correct this as soon as the user's status is observed.
                                 initPresence(userId, { status: "offline", client_status: null });
-                                log.info(`Initialised presence for ${userId}: offline (not in chunk)`);
-                            } else if (existing.status !== "offline") {
-                                log.info(
-                                    `${userId}: absent from guild chunk presences — ` +
-                                    `correcting ${existing.status} → offline`
-                                );
-                                handlePresenceUpdate(userId, { status: "offline", client_status: null });
-                                handleActivityUpdate(userId, []);
+                                log.debug(`First presence init for ${userId}: offline (awaiting PRESENCE_UPDATE)`);
                             }
+                            // If we already have presence data: do nothing.
+                            // Real status changes arrive via PRESENCE_UPDATE events, not chunks.
                         }
                     }
                     break;
@@ -365,6 +391,7 @@ function setupGatewayHandlers(client: GatewayClient): void {
         setRequestGuildMembersFn((guildId, userIds) =>
             client.requestGuildMembers(guildId, userIds)
         );
+        setSelfbotGuildsFn(() => client.getGuilds());
 
         setTimeout(() => requestInitialPresences(client), 2_000);
 
