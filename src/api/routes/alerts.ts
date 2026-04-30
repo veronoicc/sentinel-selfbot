@@ -23,15 +23,11 @@ export function registerAlertRoutes(app: FastifyInstance): void {
         const { targetId, ruleType, condition, digestMode, fatigueThreshold, compositeCondition } = req.body;
         const stmts = getStmts();
 
-        // Use extended insert that handles new columns
-        const result = require("../../database/connection").getDb().prepare(
-            `INSERT INTO alert_rules
-             (target_id, rule_type, condition, enabled, created_at, digest_mode, fatigue_threshold, composite_condition)
-             VALUES (?, ?, ?, 1, ?, ?, ?, ?)`
-        ).run(
+        const result = stmts.insertAlertRule.run(
             targetId || null,
             ruleType,
             JSON.stringify(condition || {}),
+            1,
             Date.now(),
             digestMode ? 1 : 0,
             fatigueThreshold ?? 20,
@@ -76,10 +72,12 @@ export function registerAlertRoutes(app: FastifyInstance): void {
     }>("/api/alerts/history", async (req) => {
         const stmts = getStmts();
         const { targetId, limit, offset } = req.query;
+        const limitVal  = Math.min(Math.max(1, parseInt(limit  || "50")  || 50),  500);
+        const offsetVal = Math.max(0, parseInt(offset || "0") || 0);
         if (targetId) {
-            return stmts.getAlertHistoryByTarget.all(targetId, parseInt(limit || "50"));
+            return stmts.getAlertHistoryByTarget.all(targetId, limitVal);
         }
-        return stmts.getAlertHistory.all(parseInt(limit || "50"), parseInt(offset || "0"));
+        return stmts.getAlertHistory.all(limitVal, offsetVal);
     });
 
     app.patch<{ Params: { id: string } }>("/api/alerts/history/:id/ack", async (req, reply) => {

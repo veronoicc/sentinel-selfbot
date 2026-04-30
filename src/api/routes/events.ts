@@ -33,13 +33,22 @@ export function registerEventRoutes(app: FastifyInstance): void {
         const db = getDb();
         const { targetId, type, since, until, limit, offset, guildId, channelId, search } = req.query;
 
+        const limitVal  = Math.min(Math.max(1, parseInt(limit  || "100") || 100), 1000);
+        const offsetVal = Math.max(0, parseInt(offset || "0") || 0);
+
         let sql = "SELECT * FROM events WHERE 1=1";
         const params: any[] = [];
 
         if (targetId)  { sql += " AND target_id = ?";   params.push(targetId); }
         if (type)      { sql += " AND event_type = ?";  params.push(type); }
-        if (since)     { sql += " AND timestamp >= ?";  params.push(parseInt(since)); }
-        if (until)     { sql += " AND timestamp <= ?";  params.push(parseInt(until)); }
+        if (since) {
+            const sinceVal = parseInt(since);
+            if (!isNaN(sinceVal)) { sql += " AND timestamp >= ?"; params.push(sinceVal); }
+        }
+        if (until) {
+            const untilVal = parseInt(until);
+            if (!isNaN(untilVal)) { sql += " AND timestamp <= ?"; params.push(untilVal); }
+        }
         if (guildId)   { sql += " AND guild_id = ?";    params.push(guildId); }
         if (channelId) { sql += " AND channel_id = ?";  params.push(channelId); }
         if (search)    {
@@ -49,7 +58,7 @@ export function registerEventRoutes(app: FastifyInstance): void {
 
         sql += " ORDER BY timestamp DESC";
         sql += ` LIMIT ? OFFSET ?`;
-        params.push(parseInt(limit || "100"), parseInt(offset || "0"));
+        params.push(limitVal, offsetVal);
 
         return db.prepare(sql).all(...params);
     });
@@ -76,7 +85,19 @@ export function registerEventRoutes(app: FastifyInstance): void {
 
         sseClients.add(client);
 
+        // Send a keepalive comment every 25 s so Railway/nginx proxies don't
+        // time out the idle connection and silently drop the live-event stream.
+        const keepalive = setInterval(() => {
+            try {
+                reply.raw.write(":ping\n\n");
+            } catch {
+                clearInterval(keepalive);
+                sseClients.delete(client);
+            }
+        }, 25_000);
+
         req.raw.on("close", () => {
+            clearInterval(keepalive);
             sseClients.delete(client);
         });
     });

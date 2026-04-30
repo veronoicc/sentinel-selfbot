@@ -35,8 +35,12 @@ export function registerTargetRoutes(app: FastifyInstance): void {
             }
         }
 
+        const priorityVal = Math.floor(priority ?? 0);
+        if (!Number.isFinite(priorityVal) || priorityVal < 0) {
+            return reply.code(400).send({ error: "priority must be a non-negative integer" });
+        }
         const stmts = getStmts();
-        stmts.insertTarget.run(userId, Date.now(), label || null, notes || null, priority ?? 0, 1);
+        stmts.insertTarget.run(userId, Date.now(), label || null, notes || null, priorityVal, 1);
 
         if (config.backfillEnabled) {
             startBackfillForTarget(userId).catch(() => { });
@@ -73,8 +77,12 @@ export function registerTargetRoutes(app: FastifyInstance): void {
             params.push(body.notes ?? null);
         }
         if ("priority" in body && body.priority !== undefined) {
+            const p = Math.floor(body.priority);
+            if (!Number.isFinite(p) || p < 0) {
+                return reply.code(400).send({ error: "priority must be a non-negative integer" });
+            }
             setParts.push("priority = ?");
-            params.push(body.priority);
+            params.push(p);
         }
         if ("active" in body && body.active !== undefined) {
             setParts.push("active = ?");

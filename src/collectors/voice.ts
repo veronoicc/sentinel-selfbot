@@ -80,6 +80,7 @@ export function handleVoiceStateUpdate(targetId: string, data: any): void {
 
         openVoiceSession(targetId, guildId, newChannelId, null, now, selfMute, selfDeaf, serverMute, serverDeaf, streaming);
         const joinData = JSON.stringify({ guildId, channelId: newChannelId });
+        stmts.insertEvent.run(targetId, "VOICE_JOIN", now, joinData, guildId, newChannelId);
         evaluateEvent("VOICE_JOIN", targetId, joinData, now);
         pushSSEEvent({
             target_id: targetId,

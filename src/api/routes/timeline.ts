@@ -1,6 +1,12 @@
 import { FastifyInstance } from "fastify";
 import { getDb } from "../../database/connection";
 
+/** Parse a YYYY-MM-DD string to a UTC midnight timestamp. Returns NaN on bad input. */
+function parseDateParam(s: string): number {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return NaN;
+    return new Date(s + "T00:00:00Z").getTime();
+}
+
 export function registerTimelineRoutes(app: FastifyInstance): void {
 
     // Timeline with extended filters
@@ -18,8 +24,8 @@ export function registerTimelineRoutes(app: FastifyInstance): void {
     }>("/api/targets/:userId/timeline", async (req) => {
         const db = getDb();
         const { userId } = req.params;
-        const limit = parseInt(req.query.limit || "100");
-        const offset = parseInt(req.query.offset || "0");
+        const limit  = Math.min(Math.max(1, parseInt(req.query.limit  || "100") || 100), 1000);
+        const offset = Math.max(0, parseInt(req.query.offset || "0") || 0);
         const { type, event_types, since, until, search } = req.query;
 
         let sql = "SELECT * FROM events WHERE target_id = ?";
@@ -39,8 +45,14 @@ export function registerTimelineRoutes(app: FastifyInstance): void {
             }
         }
 
-        if (since) { sql += " AND timestamp >= ?"; params.push(parseInt(since)); }
-        if (until) { sql += " AND timestamp <= ?"; params.push(parseInt(until)); }
+        if (since) {
+            const sinceTs = parseInt(since);
+            if (!isNaN(sinceTs)) { sql += " AND timestamp >= ?"; params.push(sinceTs); }
+        }
+        if (until) {
+            const untilTs = parseInt(until);
+            if (!isNaN(untilTs)) { sql += " AND timestamp <= ?"; params.push(untilTs); }
+        }
 
         if (search) {
             sql += " AND (data LIKE ? OR event_type LIKE ?)";
@@ -75,12 +87,15 @@ export function registerTimelineRoutes(app: FastifyInstance): void {
     // Day view
     app.get<{ Params: { userId: string; date: string } }>(
         "/api/targets/:userId/timeline/day/:date",
-        async (req) => {
+        async (req, reply) => {
             const db = getDb();
             const { userId, date } = req.params;
 
-            const dayStart = new Date(date + "T00:00:00").getTime();
-            const dayEnd = dayStart + 86400000;
+            const dayStart = parseDateParam(date);
+            if (isNaN(dayStart)) {
+                return reply.code(400).send({ error: "Invalid date format — expected YYYY-MM-DD" });
+            }
+            const dayEnd = dayStart + 86_400_000;
 
             const events = db.prepare(
                 "SELECT * FROM events WHERE target_id = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC"
@@ -114,10 +129,16 @@ export function registerTimelineRoutes(app: FastifyInstance): void {
             return reply.code(400).send({ error: "from and to query params required (YYYY-MM-DD)" });
         }
 
-        const fromTs = new Date(from + "T00:00:00").getTime();
-        const toTs = new Date(to + "T23:59:59").getTime();
+        const fromTs = parseDateParam(from);
+        const toTs   = parseDateParam(to) + 86_400_000 - 1; // inclusive end of day
+        if (isNaN(fromTs) || isNaN(toTs)) {
+            return reply.code(400).send({ error: "Invalid date format — expected YYYY-MM-DD" });
+        }
         const days = (toTs - fromTs) / 86_400_000;
 
+        if (days < 0) {
+            return reply.code(400).send({ error: "'from' must be before 'to'" });
+        }
         if (days > 30) {
             return reply.code(400).send({ error: "Range cannot exceed 30 days" });
         }

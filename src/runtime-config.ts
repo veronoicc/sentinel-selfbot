@@ -45,6 +45,55 @@ export type RuntimeKey = typeof RUNTIME_KEYS[number];
 type ChangeCallback = (key: RuntimeKey, value: string) => void;
 const changeListeners = new Map<RuntimeKey, ChangeCallback[]>();
 
+// Minimum values for interval/numeric keys to prevent degenerate configurations.
+const NUMERIC_MIN: Partial<Record<RuntimeKey, number>> = {
+    AI_ANALYSIS_INTERVAL_MS:          60_000,    // 1 min
+    AI_CATEGORIZATION_BATCH_SIZE:     1,
+    SUPABASE_SYNC_INTERVAL_MS:        10_000,    // 10 s
+    BACKFILL_MAX_DAYS:                1,
+    BACKFILL_MAX_MESSAGES_PER_CHANNEL:1,
+    ALERT_DIGEST_INTERVAL_MS:         60_000,    // 1 min
+    ALERT_FATIGUE_THRESHOLD:          1,
+    PROFILE_POLL_INTERVAL_MS:         60_000,    // 1 min
+    STATUS_POLL_INTERVAL_MS:          30_000,    // 30 s
+    DAILY_SUMMARY_INTERVAL_MS:        300_000,   // 5 min
+};
+
+/**
+ * Validate a runtime value before it is applied and persisted.
+ * Returns an error message string on failure, or null on success.
+ */
+function validateRuntimeValue(key: RuntimeKey, value: string): string | null {
+    const entry = KEY_MAP[key];
+    if (!entry) return null;
+
+    // Non-empty check for required string keys
+    if (key === "DISCORD_TOKEN" && !value.trim()) {
+        return "DISCORD_TOKEN cannot be empty";
+    }
+
+    // Time format check for brief generation time (HH:MM, 00:00–23:59)
+    if (key === "BRIEF_GENERATION_TIME") {
+        if (!/^\d{2}:\d{2}$/.test(value)) {
+            return "BRIEF_GENERATION_TIME must be in HH:MM format (e.g. 07:00)";
+        }
+        const [h, m] = value.split(":").map(Number);
+        if (h > 23 || m > 59) {
+            return "BRIEF_GENERATION_TIME must be a valid time (00:00–23:59)";
+        }
+    }
+
+    // Numeric range checks
+    const min = NUMERIC_MIN[key];
+    if (min !== undefined) {
+        const parsed = parseInt(value, 10);
+        if (isNaN(parsed)) return `${key} must be a valid integer`;
+        if (parsed < min)  return `${key} must be at least ${min}`;
+    }
+
+    return null;
+}
+
 // Maps env key names → config object props + type parsers
 const KEY_MAP: Record<RuntimeKey, { prop: keyof typeof config; parse: (v: string) => any }> = {
     DISCORD_TOKEN:                    { prop: "discordToken",              parse: v => v },
@@ -115,6 +164,11 @@ export function getRuntimeConfigMasked(): Record<string, string> {
 
 /** Persist a new value, update the in-memory config object, and fire callbacks. */
 export function setRuntimeConfig(key: RuntimeKey, value: string): void {
+    const validationError = validateRuntimeValue(key, value);
+    if (validationError) {
+        throw new Error(validationError);
+    }
+
     const db = getDb();
     db.prepare(
         `INSERT INTO runtime_config (key, value, updated_at) VALUES (?, ?, ?)

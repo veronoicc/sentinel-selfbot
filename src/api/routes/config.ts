@@ -34,7 +34,12 @@ export function registerConfigRoutes(app: FastifyInstance): void {
             return reply.send({ success: true });
         } catch (err: any) {
             log.error(`Config update error for ${key}: ${err.message}`);
-            return reply.code(500).send({ error: err.message });
+            // Validation errors from setRuntimeConfig are client mistakes → 400.
+            // Unexpected DB or system errors → 500.
+            const isValidation = err.message.includes("cannot be empty") ||
+                                 err.message.includes("must be") ||
+                                 err.message.includes("at least");
+            return reply.code(isValidation ? 400 : 500).send({ error: err.message });
         }
     });
 }

@@ -9,7 +9,9 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
     }
 
     const token = authHeader.substring(7);
-    if (token !== config.apiAuthToken) {
+    // Guard against empty token (e.g. "Bearer " with nothing after the space)
+    // and against an accidentally-blank API_AUTH_TOKEN matching an empty submission.
+    if (!token || !config.apiAuthToken || token !== config.apiAuthToken) {
         reply.code(403).send({ error: "Invalid auth token" });
         return;
     }

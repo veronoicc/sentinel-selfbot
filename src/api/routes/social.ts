@@ -13,7 +13,7 @@ export function registerSocialRoutes(app: FastifyInstance): void {
         "/api/targets/:userId/social/relationships",
         async (req) => {
             const { userId } = req.params;
-            const days = parseInt(req.query.days || "30");
+            const days = Math.min(Math.max(1, parseInt(req.query.days || "30") || 30), 365);
             const stmts = getStmts();
 
             const graph = buildSocialGraph(userId, days);
@@ -81,7 +81,7 @@ export function registerSocialRoutes(app: FastifyInstance): void {
         "/api/targets/:userId/social/changes",
         async (req) => {
             const { userId } = req.params;
-            const limit = parseInt(req.query.limit || "50");
+            const limit = Math.min(Math.max(1, parseInt(req.query.limit || "50") || 50), 500);
             const stmts = getStmts();
             return stmts.getRelationshipChanges.all(userId, limit);
         }

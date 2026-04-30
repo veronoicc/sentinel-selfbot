@@ -64,40 +64,46 @@ function applyMigration(version: number): void {
             // Recreate alert_history with ON DELETE SET NULL on rule_id, matching
             // the Supabase schema and preventing FK errors when deleting alert rules.
             // Also adds a missing index on rule_id for efficient cascade lookups.
+            //
+            // The entire swap runs in a single transaction so a mid-migration crash
+            // never leaves the database without an alert_history table.
             const db = getDb();
 
             // Disable FK enforcement temporarily so the table swap doesn't fail
             // on self-referential or cross-table dependencies during the rename.
             db.pragma("foreign_keys = OFF");
             try {
-                db.exec(`
-                    CREATE TABLE IF NOT EXISTS alert_history_new (
-                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                        rule_id      INTEGER,
-                        target_id    TEXT    NOT NULL,
-                        alert_type   TEXT    NOT NULL,
-                        message      TEXT    NOT NULL,
-                        timestamp    INTEGER NOT NULL,
-                        acknowledged INTEGER DEFAULT 0,
-                        FOREIGN KEY (rule_id)   REFERENCES alert_rules(id) ON DELETE SET NULL,
-                        FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
-                    );
-                    INSERT INTO alert_history_new
-                        SELECT id, rule_id, target_id, alert_type, message, timestamp, acknowledged
-                        FROM   alert_history;
-                    DROP TABLE alert_history;
-                    ALTER TABLE alert_history_new RENAME TO alert_history;
-                    CREATE INDEX IF NOT EXISTS idx_alert_history_target
-                        ON alert_history(target_id, timestamp);
-                    CREATE INDEX IF NOT EXISTS idx_alert_history_rule
-                        ON alert_history(rule_id);
-                `);
+                const migrate = db.transaction(() => {
+                    db.exec(`
+                        CREATE TABLE IF NOT EXISTS alert_history_new (
+                            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                            rule_id      INTEGER,
+                            target_id    TEXT    NOT NULL,
+                            alert_type   TEXT    NOT NULL,
+                            message      TEXT    NOT NULL,
+                            timestamp    INTEGER NOT NULL,
+                            acknowledged INTEGER DEFAULT 0,
+                            FOREIGN KEY (rule_id)   REFERENCES alert_rules(id) ON DELETE SET NULL,
+                            FOREIGN KEY (target_id) REFERENCES targets(user_id) ON DELETE CASCADE
+                        );
+                        INSERT INTO alert_history_new
+                            SELECT id, rule_id, target_id, alert_type, message, timestamp, acknowledged
+                            FROM   alert_history;
+                        DROP TABLE alert_history;
+                        ALTER TABLE alert_history_new RENAME TO alert_history;
+                        CREATE INDEX IF NOT EXISTS idx_alert_history_target
+                            ON alert_history(target_id, timestamp);
+                        CREATE INDEX IF NOT EXISTS idx_alert_history_rule
+                            ON alert_history(rule_id);
+                    `);
 
-                // Null-out any orphaned rule_ids whose rules have already been deleted.
-                db.prepare(
-                    "UPDATE alert_history SET rule_id = NULL WHERE rule_id IS NOT NULL AND rule_id NOT IN (SELECT id FROM alert_rules)"
-                ).run();
+                    // Null-out any orphaned rule_ids whose rules have already been deleted.
+                    db.prepare(
+                        "UPDATE alert_history SET rule_id = NULL WHERE rule_id IS NOT NULL AND rule_id NOT IN (SELECT id FROM alert_rules)"
+                    ).run();
+                });
 
+                migrate();
                 log.info("Migration v4: alert_history recreated with ON DELETE SET NULL FK");
             } catch (err: any) {
                 log.error(`Migration v4 failed: ${err.message}`);

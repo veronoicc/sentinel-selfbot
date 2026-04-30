@@ -44,15 +44,25 @@ export function registerStatusRoutes(app: FastifyInstance): void {
         const db = getDb();
         const { userId } = req.params;
         const { search, limit: limitStr, offset: offsetStr, channelId, guildId, since, until, source, category } = req.query;
-        const limit  = parseInt(limitStr  || "100");
-        const offset = parseInt(offsetStr || "0");
+        const limit  = Math.min(Math.max(1, parseInt(limitStr  || "100") || 100), 500);
+        const offset = Math.max(0, parseInt(offsetStr || "0") || 0);
 
         if (search) {
             let sql = "SELECT * FROM messages WHERE target_id = ? AND content LIKE ?";
             const params: any[] = [userId, `%${search}%`];
-            if (source) { sql += " AND source = ?"; params.push(source); }
-            sql += " ORDER BY created_at DESC LIMIT ?";
-            params.push(limit);
+            if (channelId) { sql += " AND channel_id = ?"; params.push(channelId); }
+            if (guildId)   { sql += " AND guild_id = ?";   params.push(guildId); }
+            if (since) {
+                const sinceVal = parseInt(since);
+                if (!isNaN(sinceVal)) { sql += " AND created_at >= ?"; params.push(sinceVal); }
+            }
+            if (until) {
+                const untilVal = parseInt(until);
+                if (!isNaN(untilVal)) { sql += " AND created_at <= ?"; params.push(untilVal); }
+            }
+            if (source)    { sql += " AND source = ?"; params.push(source); }
+            sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+            params.push(limit, offset);
             return db.prepare(sql).all(...params);
         }
 
@@ -63,8 +73,14 @@ export function registerStatusRoutes(app: FastifyInstance): void {
             const params: any[] = [userId, category];
             if (channelId) { sql += " AND m.channel_id = ?";   params.push(channelId); }
             if (guildId)   { sql += " AND m.guild_id = ?";     params.push(guildId); }
-            if (since)     { sql += " AND m.created_at >= ?";  params.push(parseInt(since)); }
-            if (until)     { sql += " AND m.created_at <= ?";  params.push(parseInt(until)); }
+            if (since) {
+                const sinceVal = parseInt(since);
+                if (!isNaN(sinceVal)) { sql += " AND m.created_at >= ?"; params.push(sinceVal); }
+            }
+            if (until) {
+                const untilVal = parseInt(until);
+                if (!isNaN(untilVal)) { sql += " AND m.created_at <= ?"; params.push(untilVal); }
+            }
             if (source)    { sql += " AND m.source = ?";       params.push(source); }
             sql += " ORDER BY m.created_at DESC LIMIT ? OFFSET ?";
             params.push(limit, offset);
@@ -75,8 +91,14 @@ export function registerStatusRoutes(app: FastifyInstance): void {
         const params: any[] = [userId];
         if (channelId) { sql += " AND channel_id = ?"; params.push(channelId); }
         if (guildId)   { sql += " AND guild_id = ?";   params.push(guildId); }
-        if (since)     { sql += " AND created_at >= ?"; params.push(parseInt(since)); }
-        if (until)     { sql += " AND created_at <= ?"; params.push(parseInt(until)); }
+        if (since) {
+            const sinceVal = parseInt(since);
+            if (!isNaN(sinceVal)) { sql += " AND created_at >= ?"; params.push(sinceVal); }
+        }
+        if (until) {
+            const untilVal = parseInt(until);
+            if (!isNaN(untilVal)) { sql += " AND created_at <= ?"; params.push(untilVal); }
+        }
         if (source)    { sql += " AND source = ?";      params.push(source); }
         sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
         params.push(limit, offset);
@@ -85,18 +107,23 @@ export function registerStatusRoutes(app: FastifyInstance): void {
 
     app.get<{ Params: { userId: string }; Querystring: { limit?: string; offset?: string } }>("/api/targets/:userId/messages/deleted", async (req) => {
         const stmts = getStmts();
-        return stmts.getDeletedMessages.all(req.params.userId, parseInt(req.query.limit || "100"), parseInt(req.query.offset || "0"));
+        const limit  = Math.min(Math.max(1, parseInt(req.query.limit  || "100") || 100), 500);
+        const offset = Math.max(0, parseInt(req.query.offset || "0") || 0);
+        return stmts.getDeletedMessages.all(req.params.userId, limit, offset);
     });
 
     app.get<{ Params: { userId: string }; Querystring: { limit?: string; offset?: string } }>("/api/targets/:userId/messages/edited", async (req) => {
         const stmts = getStmts();
-        return stmts.getEditedMessages.all(req.params.userId, parseInt(req.query.limit || "100"), parseInt(req.query.offset || "0"));
+        const limit  = Math.min(Math.max(1, parseInt(req.query.limit  || "100") || 100), 500);
+        const offset = Math.max(0, parseInt(req.query.offset || "0") || 0);
+        return stmts.getEditedMessages.all(req.params.userId, limit, offset);
     });
 
     // Profile history
     app.get<{ Params: { userId: string }; Querystring: { limit?: string } }>("/api/targets/:userId/profile/history", async (req) => {
         const stmts = getStmts();
-        return stmts.getSnapshotHistory.all(req.params.userId, parseInt(req.query.limit || "50"));
+        const limit = Math.min(Math.max(1, parseInt(req.query.limit || "50") || 50), 200);
+        return stmts.getSnapshotHistory.all(req.params.userId, limit);
     });
 
     app.get<{ Params: { userId: string } }>("/api/targets/:userId/profile/current", async (req) => {
@@ -110,7 +137,7 @@ export function registerStatusRoutes(app: FastifyInstance): void {
         "/api/targets/:userId/briefs",
         async (req) => {
             const stmts = getStmts();
-            const limit = parseInt(req.query.limit || "30");
+            const limit = Math.min(Math.max(1, parseInt(req.query.limit || "30") || 30), 365);
             return stmts.getDailyBriefs.all(req.params.userId, limit);
         }
     );
@@ -119,6 +146,9 @@ export function registerStatusRoutes(app: FastifyInstance): void {
         "/api/targets/:userId/briefs/:date",
         async (req, reply) => {
             const stmts = getStmts();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) {
+                return reply.code(400).send({ error: "Invalid date format — expected YYYY-MM-DD" });
+            }
             const row = stmts.getDailyBriefByDate.get(req.params.userId, req.params.date);
             if (!row) return reply.code(404).send({ error: "Brief not found" });
             return row;
@@ -130,6 +160,9 @@ export function registerStatusRoutes(app: FastifyInstance): void {
         async (req, reply) => {
             const { userId } = req.params;
             const dateStr = req.query.date || new Date().toISOString().split("T")[0];
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                return reply.code(400).send({ error: "Invalid date format — expected YYYY-MM-DD" });
+            }
             const stmts = getStmts();
             const target = stmts.getTarget.get(userId) as any;
             if (!target) return reply.code(404).send({ error: "Target not found" });

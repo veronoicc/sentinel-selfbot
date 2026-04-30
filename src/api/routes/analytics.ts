@@ -22,7 +22,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
     }>("/api/targets/:userId/analytics/presence", async (req) => {
         const db      = getDb();
         const { userId } = req.params;
-        const days    = parseInt(req.query.days || "30");
+        const days    = Math.min(Math.max(1, parseInt(req.query.days || "30") || 30), 365);
         const since   = Date.now() - days * 86_400_000;
 
         const now = Date.now();
@@ -59,7 +59,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
         Params: { userId: string };
         Querystring: { days?: string };
     }>("/api/targets/:userId/analytics/activities", async (req) => {
-        const days = parseInt(req.query.days || "90");
+        const days = Math.min(Math.max(1, parseInt(req.query.days || "90") || 90), 365);
         return analyzeGamingProfile(req.params.userId, days);
     });
 
@@ -68,7 +68,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
         Params: { userId: string };
         Querystring: { days?: string };
     }>("/api/targets/:userId/analytics/messages", async (req) => {
-        const days = parseInt(req.query.days || "30");
+        const days = Math.min(Math.max(1, parseInt(req.query.days || "30") || 30), 365);
         return analyzeCommunicationStyle(req.params.userId, days);
     });
 
@@ -77,7 +77,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
         Params: { userId: string };
         Querystring: { days?: string };
     }>("/api/targets/:userId/analytics/voice", async (req) => {
-        const days = parseInt(req.query.days || "30");
+        const days = Math.min(Math.max(1, parseInt(req.query.days || "30") || 30), 365);
         return analyzeVoiceHabits(req.params.userId, days);
     });
 
@@ -86,7 +86,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
         Params: { userId: string };
         Querystring: { days?: string };
     }>("/api/targets/:userId/analytics/social", async (req) => {
-        const days = parseInt(req.query.days || "30");
+        const days = Math.min(Math.max(1, parseInt(req.query.days || "30") || 30), 365);
         return buildSocialGraph(req.params.userId, days);
     });
 
@@ -95,7 +95,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
         Params: { userId: string };
         Querystring: { weeks?: string };
     }>("/api/targets/:userId/analytics/heatmap", async (req) => {
-        const weeks = parseInt(req.query.weeks || "4");
+        const weeks = Math.min(Math.max(1, parseInt(req.query.weeks || "4") || 4), 52);
         return detectRoutine(req.params.userId, weeks);
     });
 
@@ -107,7 +107,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
     }>("/api/targets/:userId/analytics/daily", async (req) => {
         const stmts   = getStmts();
         const { userId } = req.params;
-        const days    = parseInt(req.query.days || "30");
+        const days    = Math.min(Math.max(1, parseInt(req.query.days || "30") || 30), 365);
         return stmts.getDailySummaries.all(userId, days);
     });
 
@@ -116,7 +116,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
         Params: { userId: string };
         Querystring: { days?: string };
     }>("/api/targets/:userId/analytics/music", async (req) => {
-        const days = parseInt(req.query.days || "30");
+        const days = Math.min(Math.max(1, parseInt(req.query.days || "30") || 30), 365);
         return analyzeMusicProfile(req.params.userId, days);
     });
 
@@ -213,10 +213,12 @@ export function registerAnalyticsRoutes(app: FastifyInstance): void {
     // ── Typing / ghost-type stats ──────────────────────────────────────────────
     app.get<{
         Params: { userId: string };
+        Querystring: { limit?: string };
     }>("/api/targets/:userId/analytics/typing", async (req) => {
         const stmts  = getStmts();
         const { userId } = req.params;
-        const events = stmts.getTypingEvents.all(userId, 500) as any[];
+        const limit  = Math.min(Math.max(1, parseInt(req.query.limit || "500") || 500), 2000);
+        const events = stmts.getTypingEvents.all(userId, limit) as any[];
         const total  = events.length;
         const ghosts = events.filter((e: any) => !e.resulted_in_message).length;
         const withDelay = events.filter((e: any) => e.message_delay_ms);
