@@ -108,6 +108,21 @@ function applyMigration(version: number): void {
             break;
         }
 
+        case 5: {
+            const db = getDb();
+            try {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS runtime_config (
+                        key        TEXT    PRIMARY KEY,
+                        value      TEXT    NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    )
+                `);
+            } catch { /* table may already exist */ }
+            log.info("Migration v5: runtime_config table created");
+            break;
+        }
+
         default:
             break;
     }

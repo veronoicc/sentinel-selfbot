@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const CREATE_TABLES_SQL = `
 -- Core tables
@@ -329,5 +329,14 @@ CREATE TABLE IF NOT EXISTS sync_state (
 CREATE TABLE IF NOT EXISTS heartbeat_log (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp INTEGER NOT NULL
+);
+
+-- ── Runtime Config ─────────────────────────────────────────────────────────────
+-- Stores hot-swappable settings that override .env values without restart.
+-- Sensitive keys (tokens, keys, URLs) are never returned in plaintext by the API.
+CREATE TABLE IF NOT EXISTS runtime_config (
+    key        TEXT    PRIMARY KEY,
+    value      TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 `;

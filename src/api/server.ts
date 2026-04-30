@@ -13,6 +13,7 @@ import { registerExportRoutes } from "./routes/export";
 import { registerStatusRoutes } from "./routes/status";
 import { registerSocialRoutes } from "./routes/social";
 import { registerBackfillRoutes } from "./routes/backfill";
+import { registerConfigRoutes } from "./routes/config";
 
 const log = createLogger("API");
 
@@ -44,6 +45,7 @@ export async function startApiServer(): Promise<void> {
     registerStatusRoutes(app);
     registerSocialRoutes(app);
     registerBackfillRoutes(app);
+    registerConfigRoutes(app);
 
     try {
         await app.listen({ port: config.apiPort, host: "0.0.0.0" });

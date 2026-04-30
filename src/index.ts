@@ -41,6 +41,8 @@ import { scheduleBriefGeneration } from "./briefs/brief-generator";
 import { startBackfillOnStartup } from "./backfill/backfill-engine";
 import { startDigestFlusher } from "./alerts/digest";
 import { notifyStartup, notifyCriticalError } from "./utils/webhook-notifier";
+import { loadRuntimeConfig, onConfigChange } from "./runtime-config";
+import { resetAIProvider } from "./ai/provider";
 
 const log = createLogger("Sentinel");
 
@@ -398,6 +400,19 @@ function startVoiceParticipantTracker(client: GatewayClient): void {
     }, withJitter(60_000));
 }
 
+// ── AI analysis interval ──────────────────────────────────────────────────────
+
+function startAIAnalysisLoop(): NodeJS.Timeout {
+    return setInterval(async () => {
+        try { await runAllBaselineComputation(); }
+        catch (err: any) { log.error(`AI baseline error: ${err.message}`); }
+        try { await runAISocialGraphAnalysis(); }
+        catch (err: any) { log.error(`AI social graph error: ${err.message}`); }
+        try { await runAllCategorization(); }
+        catch (err: any) { log.error(`AI categorization error: ${err.message}`); }
+    }, config.aiAnalysisIntervalMs);
+}
+
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 function shutdown(): void {
@@ -441,15 +456,18 @@ async function main(): Promise<void> {
         log.info("RANDOM_JITTER is enabled — polling intervals and IDENTIFY profile will vary");
     }
 
+    // Init DB and load runtime config first so any token/key stored in DB
+    // is applied before validateConfig() checks for required values.
+    initDatabase();
+    runMigrations();
+    loadRuntimeConfig();
+
     try {
         validateConfig();
     } catch (err: any) {
         log.error(err.message);
         process.exit(1);
     }
-
-    initDatabase();
-    runMigrations();
 
     if (config.dbMode === "cloud") {
         try {
@@ -500,10 +518,6 @@ async function main(): Promise<void> {
 
     gateway = new GatewayClient();
     setupGatewayHandlers(gateway);
-    gateway.on("error", (err: Error) => {
-        log.error(`Gateway client error: ${err.message}`);
-        // Non-fatal — the gateway's reconnect loop handles recovery.
-    });
     await gateway.connect();
 
     startProfilePoller();
@@ -549,16 +563,48 @@ async function main(): Promise<void> {
                 log.error(`AI analysis first run error: ${err.message}`);
             }
 
-            aiAnalysisInterval = setInterval(async () => {
-                try { await runAllBaselineComputation(); }
-                catch (err: any) { log.error(`AI baseline error: ${err.message}`); }
-                try { await runAISocialGraphAnalysis(); }
-                catch (err: any) { log.error(`AI social graph error: ${err.message}`); }
-                try { await runAllCategorization(); }
-                catch (err: any) { log.error(`AI categorization error: ${err.message}`); }
-            }, config.aiAnalysisIntervalMs);
+            aiAnalysisInterval = startAIAnalysisLoop();
         }, 600_000);
     }
+
+    // ── Runtime config side-effects ────────────────────────────────────────────
+    // These callbacks fire whenever the web UI updates a key via PATCH /api/config.
+
+    onConfigChange("DISCORD_TOKEN", () => {
+        log.info("DISCORD_TOKEN changed — reconnecting gateway…");
+        if (voiceParticipantInterval) { clearInterval(voiceParticipantInterval); voiceParticipantInterval = null; }
+        const old = gateway;
+        old?.destroy();
+        gateway = new GatewayClient();
+        setupGatewayHandlers(gateway);
+        startVoiceParticipantTracker(gateway);
+        gateway.connect().catch(err => log.error(`Gateway reconnect error: ${err.message}`));
+    });
+
+    const aiKeys = ["AI_PROVIDER", "AI_MODEL", "AI_API_KEY", "AI_BASE_URL"] as const;
+    for (const key of aiKeys) {
+        onConfigChange(key, () => resetAIProvider());
+    }
+
+    onConfigChange("BRIEF_GENERATION_TIME", () => {
+        if (briefHandle) clearTimeout(briefHandle);
+        briefHandle = scheduleBriefGeneration();
+        log.info("Brief generation rescheduled");
+    });
+
+    onConfigChange("ALERT_DIGEST_INTERVAL_MS", () => {
+        if (digestHandle) clearInterval(digestHandle);
+        digestHandle = startDigestFlusher();
+        log.info("Digest flusher rescheduled");
+    });
+
+    onConfigChange("AI_ANALYSIS_INTERVAL_MS", () => {
+        if (aiAnalysisInterval) {
+            clearInterval(aiAnalysisInterval);
+            aiAnalysisInterval = startAIAnalysisLoop();
+            log.info("AI analysis interval rescheduled");
+        }
+    });
 
     log.info("=== Sentinel Fully Operational ===");
 }

@@ -304,6 +304,18 @@ export function createAIProvider(): AIProvider {
     }
 }
 
-export const ai = createAIProvider();
+// Mutable singleton so resetAIProvider() can hot-swap the provider without
+// breaking existing call sites that hold a reference to `ai`.
+let _provider: AIProvider = createAIProvider();
+
+export const ai: AIProvider = {
+    complete:    (...args) => _provider.complete(...args),
+    isAvailable: ()       => _provider.isAvailable(),
+};
+
+export function resetAIProvider(): void {
+    _provider = createAIProvider();
+    log.info(`AI provider reset: ${config.aiProvider}${config.aiProvider !== "none" ? ` (model: ${config.aiModel})` : ""}`);
+}
 
 log.info(`AI provider: ${config.aiProvider}${config.aiProvider !== "none" ? ` (model: ${config.aiModel})` : ""}`);
