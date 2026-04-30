@@ -13,8 +13,13 @@ const GATEWAY_RATE_LIMIT = 120;
 const GATEWAY_RATE_PERIOD = 60_000;
 
 // ── Browser / OS profiles used in the IDENTIFY payload ───────────────────────
-// When RANDOM_JITTER=true a profile is chosen at random on every (re)connect,
-// making the gateway fingerprint less predictable.
+// The active profile is selected ONCE at process startup (see _chosenProfile
+// below). When RANDOM_JITTER=true the pick is random, providing deployment
+// diversity across Railway restarts. Critically, the same profile is reused on
+// every IDENTIFY and RESUME within a single process lifetime — Discord ties a
+// session to the fingerprint used at IDENTIFY time, so rotating the profile on
+// reconnect causes Discord to reject RESUME with INVALID_SESSION(resumable=false)
+// and forces a full re-IDENTIFY, which creates a presence-event gap.
 const BROWSER_PROFILES = [
     {
         os: "Windows",
@@ -63,23 +68,24 @@ const BROWSER_PROFILES = [
     },
 ] as const;
 
-function pickIdentifyProperties() {
-    const profile = config.randomJitter
-        ? BROWSER_PROFILES[Math.floor(Math.random() * BROWSER_PROFILES.length)]
-        : BROWSER_PROFILES[0];
+// Chosen once per process. Do NOT move this into pickIdentifyProperties().
+const _chosenProfile = config.randomJitter
+    ? BROWSER_PROFILES[Math.floor(Math.random() * BROWSER_PROFILES.length)]
+    : BROWSER_PROFILES[0];
 
+function pickIdentifyProperties() {
     return {
-        os: profile.os,
-        browser: profile.browser,
+        os: _chosenProfile.os,
+        browser: _chosenProfile.browser,
         device: "",
         system_locale: "en-US",
-        browser_user_agent: profile.browser_user_agent,
-        browser_version: profile.browser_version,
-        os_version: profile.os_version,
+        browser_user_agent: _chosenProfile.browser_user_agent,
+        browser_version: _chosenProfile.browser_version,
+        os_version: _chosenProfile.os_version,
         referrer: "",
         referring_domain: "",
         release_channel: "stable",
-        client_build_number: profile.client_build_number,
+        client_build_number: _chosenProfile.client_build_number,
         client_event_source: null,
     };
 }
