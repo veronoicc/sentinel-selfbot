@@ -305,6 +305,26 @@ export class GatewayClient extends EventEmitter {
         this.ws.send(JSON.stringify({ op, d }));
     }
 
+    /**
+     * Send op 14 (GUILD_SUBSCRIBE) for a guild.
+     *
+     * This tells Discord to stream real-time PRESENCE_UPDATE events for that
+     * guild's members, including offline transitions.  Without this, large
+     * guilds (>~100 members) send no presence stream to user-account clients.
+     *
+     * activities: true  — receive activity-start/stop updates
+     * typing: false     — we handle TYPING_START via intent, not subscription
+     * threads: false    — not needed for presence tracking
+     */
+    subscribeGuildPresence(guildId: string): void {
+        this.send(GatewayOpcodes.GUILD_SUBSCRIBE, {
+            guild_id:   guildId,
+            typing:     false,
+            activities: true,
+            threads:    false,
+        });
+    }
+
     requestGuildMembers(guildId: string, userIds: string[], delayMs = 0): void {
         const payload = {
             guild_id:  guildId,

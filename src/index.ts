@@ -7,7 +7,7 @@ import { resetStmts, getStmts } from "./database/queries";
 import { hydrateFromSupabase } from "./database/hydrator";
 import { GatewayClient } from "./gateway/client";
 import {
-    handlePresenceUpdate, initPresence, getCurrentPresence,
+    handlePresenceUpdate, initPresence, getCurrentPresence, isActiveStatus,
 } from "./collectors/presence";
 import {
     handleActivityUpdate, initActivities, getCurrentActivities,
@@ -176,6 +176,57 @@ function requestInitialPresences(client: GatewayClient): void {
     batches.forEach(({ guildId, userIds }, i) => {
         client.requestGuildMembers(guildId, userIds, i * STAGGER_MS);
     });
+}
+
+// ── Gateway: guild presence subscriptions (op 14) ────────────────────────────
+//
+// Send GUILD_SUBSCRIBE (op 14) for every guild that contains tracked targets.
+// This tells Discord to stream real-time PRESENCE_UPDATE events — including
+// offline transitions — for those guilds.  Must be called after READY and
+// after RESUMED (Discord drops subscriptions when the session is interrupted).
+// Re-called periodically so subscriptions don't silently expire.
+
+let presenceSubscriptionInterval: NodeJS.Timeout | null = null;
+
+function subscribeGuildPresences(client: GatewayClient): void {
+    const stmts = getStmts();
+    const targets = stmts.getActiveTargets.all() as any[];
+    if (!targets.length) return;
+
+    const guildIds = new Set<string>();
+
+    // Collect all mutual guilds from stored profile snapshots
+    for (const target of targets) {
+        const snapshot = stmts.getLatestSnapshot.get(target.user_id) as any;
+        if (!snapshot?.mutual_guilds) continue;
+        try {
+            const guilds = JSON.parse(snapshot.mutual_guilds) as any[];
+            for (const g of guilds) {
+                const id: string | undefined = typeof g === "string" ? g : g.id;
+                if (id) guildIds.add(id);
+            }
+        } catch { /* malformed JSON — skip */ }
+    }
+
+    // Fallback: subscribe to all selfbot guilds so targets without a profile
+    // snapshot still get their presence streamed on first connect.
+    for (const guild of client.getGuilds()) {
+        const id: string | undefined = typeof guild === "string" ? guild : guild.id;
+        if (id) guildIds.add(id);
+    }
+
+    if (!guildIds.size) return;
+
+    // Stagger sends to stay inside the 120 ops/60 s gateway rate limit.
+    const ids = Array.from(guildIds);
+    const STAGGER_MS = 300;
+    ids.forEach((guildId, i) => {
+        setTimeout(() => {
+            if (client.isConnected()) client.subscribeGuildPresence(guildId);
+        }, i * STAGGER_MS);
+    });
+
+    log.info(`Subscribed to presence stream for ${ids.length} guild(s) (op 14)`);
 }
 
 // ── Gateway: event handler ────────────────────────────────────────────────────
@@ -354,19 +405,29 @@ function setupGatewayHandlers(client: GatewayClient): void {
                                 }
                             }
                         } else {
-                            // User not in this chunk's presences — could be offline OR just
-                            // hidden in this guild. Only act for brand-new targets that have
-                            // no presence state at all (waiting for their first PRESENCE_UPDATE).
+                            // User is in this chunk's members list but NOT in presences.
+                            // For selfbots with GUILD_PRESENCES, absence from presences in a
+                            // user_ids-targeted chunk means the user is genuinely offline (or
+                            // invisible, which is functionally the same for tracking purposes).
                             const existing = getCurrentPresence(userId);
                             if (!existing) {
-                                // First time we've seen this target — set a provisional offline
-                                // state so analytics have a starting point. A real PRESENCE_UPDATE
-                                // will correct this as soon as the user's status is observed.
+                                // First time we've seen this target — initialise as offline.
+                                // A real PRESENCE_UPDATE will correct this when they come online.
                                 initPresence(userId, { status: "offline", client_status: null });
                                 log.debug(`First presence init for ${userId}: offline (awaiting PRESENCE_UPDATE)`);
+                            } else if (isActiveStatus(existing.status)) {
+                                // Target was active (online/idle/dnd) but is absent from
+                                // presences in this targeted chunk → they've gone offline.
+                                // Drive through handlePresenceUpdate so the session is closed,
+                                // an event is inserted, and SSE + alert engine are notified.
+                                log.info(`${userId}: absent from GUILD_MEMBERS_CHUNK presences (was ${existing.status}) — marking offline`);
+                                handlePresenceUpdate(userId, {
+                                    status: "offline",
+                                    client_status: {},
+                                    activities: [],
+                                });
                             }
-                            // If we already have presence data: do nothing.
-                            // Real status changes arrive via PRESENCE_UPDATE events, not chunks.
+                            // If already offline or unknown: do nothing.
                         }
                     }
                     break;
@@ -374,8 +435,11 @@ function setupGatewayHandlers(client: GatewayClient): void {
 
                 // ── Session resume ─────────────────────────────────────────────
                 case "RESUMED": {
-                    log.info("Session resumed — re-requesting current presences in 3 s");
-                    setTimeout(() => requestInitialPresences(client), 3_000);
+                    log.info("Session resumed — re-requesting presences + re-subscribing guilds in 3 s");
+                    setTimeout(() => {
+                        requestInitialPresences(client);
+                        subscribeGuildPresences(client);
+                    }, 3_000);
                     break;
                 }
             }
@@ -393,7 +457,12 @@ function setupGatewayHandlers(client: GatewayClient): void {
         );
         setSelfbotGuildsFn(() => client.getGuilds());
 
-        setTimeout(() => requestInitialPresences(client), 2_000);
+        setTimeout(() => {
+            requestInitialPresences(client);
+            // Subscribe to presence streams (op 14) so Discord sends PRESENCE_UPDATE
+            // events — including offline — for all guilds containing tracked targets.
+            subscribeGuildPresences(client);
+        }, 2_000);
 
         // C2 startup notification — only on first READY, not on reconnect re-IDENTIFYs
         if (!startupNotificationSent) {
@@ -445,12 +514,13 @@ function startAIAnalysisLoop(): NodeJS.Timeout {
 function shutdown(): void {
     log.info("Shutting down…");
 
-    if (dailySummaryInterval)     clearInterval(dailySummaryInterval);
-    if (voiceParticipantInterval) clearInterval(voiceParticipantInterval);
-    if (heartbeatInterval)        clearInterval(heartbeatInterval);
-    if (aiAnalysisInterval)       clearInterval(aiAnalysisInterval);
-    if (digestHandle)             clearInterval(digestHandle);
-    if (briefHandle)              clearTimeout(briefHandle);
+    if (dailySummaryInterval)        clearInterval(dailySummaryInterval);
+    if (voiceParticipantInterval)    clearInterval(voiceParticipantInterval);
+    if (heartbeatInterval)           clearInterval(heartbeatInterval);
+    if (aiAnalysisInterval)          clearInterval(aiAnalysisInterval);
+    if (digestHandle)                clearInterval(digestHandle);
+    if (briefHandle)                 clearTimeout(briefHandle);
+    if (presenceSubscriptionInterval) clearInterval(presenceSubscriptionInterval);
 
     stopProfilePoller();
     stopStatusPoller();
@@ -553,6 +623,13 @@ async function main(): Promise<void> {
     startConnectedAccountsPoller();
 
     startVoiceParticipantTracker(gateway);
+
+    // Re-send op 14 GUILD_SUBSCRIBE every 4 minutes.
+    // Discord can silently drop presence subscriptions; periodic renewal ensures
+    // we keep receiving PRESENCE_UPDATE (including offline) for all target guilds.
+    presenceSubscriptionInterval = setInterval(() => {
+        if (gateway?.isConnected()) subscribeGuildPresences(gateway);
+    }, 4 * 60 * 1000);
 
     dailySummaryInterval = setInterval(() => {
         try { computeDailySummaries(); }

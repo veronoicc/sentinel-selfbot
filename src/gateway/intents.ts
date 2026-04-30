@@ -35,6 +35,10 @@ export enum GatewayOpcodes {
     INVALID_SESSION = 9,
     HELLO = 10,
     HEARTBEAT_ACK = 11,
+    // Op 14 is an undocumented user-client opcode. It tells Discord to stream
+    // real-time PRESENCE_UPDATE events (including offline transitions) for a
+    // guild. Without it, large guilds (>~100 members) send no presence stream.
+    GUILD_SUBSCRIBE = 14,
 }
 
 export enum GatewayCloseCodes {
