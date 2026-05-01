@@ -58,29 +58,30 @@ export function handlePresenceUpdate(targetId: string, data: any): void {
         stmts.insertPresenceSession.run(targetId, newStatus, platform, now);
     }
 
-    // Store processed event data (camelCase) for consistency with alert engine
-    const eventData = JSON.stringify({
-        oldStatus,
-        newStatus,
-        platform,
-        oldPlatform,
-        clientStatus,
-    });
-    stmts.insertEvent.run(targetId, "PRESENCE_UPDATE", now, eventData, null, null);
+    // Only emit a PRESENCE_UPDATE event when the status itself changed.
+    // A platform-only change (e.g. desktop → mobile while staying DND) produces
+    // "dnd → dnd" in the timeline which is noise — emit PLATFORM_SWITCH only.
+    if (oldStatus !== newStatus) {
+        const eventData = JSON.stringify({
+            oldStatus,
+            newStatus,
+            platform,
+            oldPlatform,
+            clientStatus,
+        });
+        stmts.insertEvent.run(targetId, "PRESENCE_UPDATE", now, eventData, null, null);
+        evaluateEvent("PRESENCE_UPDATE", targetId, eventData, now);
+        pushSSEEvent({
+            target_id:  targetId,
+            event_type: "PRESENCE_UPDATE",
+            timestamp:  now,
+            data: { oldStatus, newStatus, platform, oldPlatform, clientStatus },
+        });
+        log.debug(`${targetId}: ${oldStatus} -> ${newStatus} (${platform || "unknown"})`);
+    }
 
-    // Fire alert evaluation with processed data
-    evaluateEvent("PRESENCE_UPDATE", targetId, eventData, now);
-
-    // Push processed event to SSE clients (not raw Discord payload)
-    pushSSEEvent({
-        target_id:  targetId,
-        event_type: "PRESENCE_UPDATE",
-        timestamp:  now,
-        data: { oldStatus, newStatus, platform, oldPlatform, clientStatus },
-    });
-
-    // Track platform switch
-    if (oldPlatform && platform && oldPlatform !== platform) {
+    // Track platform switch (independent of status change — can fire alone or together)
+    if (oldPlatform !== platform && (oldPlatform || platform)) {
         const switchData = JSON.stringify({ from: oldPlatform, to: platform });
         stmts.insertEvent.run(targetId, "PLATFORM_SWITCH", now, switchData, null, null);
         pushSSEEvent({
@@ -89,12 +90,10 @@ export function handlePresenceUpdate(targetId: string, data: any): void {
             timestamp:  now,
             data: { from: oldPlatform, to: platform },
         });
-        log.debug(`${targetId} switched platform: ${oldPlatform} -> ${platform}`);
+        log.debug(`${targetId}: platform ${oldPlatform ?? "none"} -> ${platform ?? "none"} (${newStatus})`);
     }
 
     currentPresence.set(targetId, { status: newStatus, platform, clientStatus });
-
-    log.debug(`${targetId}: ${oldStatus} -> ${newStatus} (${platform || "unknown"})`);
 }
 
 export function initPresence(targetId: string, data: any): void {

@@ -7,7 +7,7 @@ import { resetStmts, getStmts } from "./database/queries";
 import { hydrateFromSupabase } from "./database/hydrator";
 import { GatewayClient } from "./gateway/client";
 import {
-    handlePresenceUpdate, initPresence, getCurrentPresence, isActiveStatus,
+    handlePresenceUpdate, initPresence, getCurrentPresence,
 } from "./collectors/presence";
 import {
     handleActivityUpdate, initActivities, getCurrentActivities,
@@ -370,11 +370,24 @@ function setupGatewayHandlers(client: GatewayClient): void {
 
                 // ── Guild members chunk ────────────────────────────────────────
                 case "GUILD_MEMBERS_CHUNK": {
-                    // IMPORTANT: Discord only populates data.presences with users who
-                    // currently have an ACTIVE (non-offline) status visible in this guild.
-                    // Absence from presences does NOT mean the user is offline — they may
-                    // be online in a different guild, or have guild-specific presence hidden.
-                    // We therefore NEVER force a target to "offline" based on chunk absence.
+                    // Discord only includes users in data.presences if they have an
+                    // ACTIVE (non-offline) status visible in that specific guild.
+                    //
+                    // Absence from presences does NOT reliably mean the user is offline:
+                    // - A user may be visible in guild A's presences but not guild B's,
+                    //   depending on guild-specific presence visibility.
+                    // - The status poller queries multiple guilds; treating absence in any
+                    //   one chunk as "offline" causes rapid false oscillation (DND → offline
+                    //   → DND → offline every poll cycle).
+                    //
+                    // Offline transitions are handled exclusively by PRESENCE_UPDATE events
+                    // delivered via op 14 (GUILD_SUBSCRIBE) subscriptions, which are
+                    // re-sent every 4 minutes and on every reconnect/resume.
+                    //
+                    // Chunks are used here ONLY for:
+                    //   1. Initial presence discovery (!existing) — safe because we have
+                    //      no prior state to contradict.
+                    //   2. Confirming / updating online status when a user IS in presences.
                     const presenceMap = new Map<string, any>();
                     for (const presence of data.presences || []) {
                         const uid: string | undefined = presence.user?.id;
@@ -390,7 +403,7 @@ function setupGatewayHandlers(client: GatewayClient): void {
                         const presence = presenceMap.get(userId);
 
                         if (presence) {
-                            // User is confirmed online in this guild — update their state.
+                            // User confirmed online in this guild — update state.
                             const existing = getCurrentPresence(userId);
                             if (!existing) {
                                 initPresence(userId, presence);
@@ -405,32 +418,14 @@ function setupGatewayHandlers(client: GatewayClient): void {
                                 }
                             }
                         } else {
-                            // User is in this chunk's members list but NOT in presences.
-                            // For selfbots with GUILD_PRESENCES, absence from presences in a
-                            // user_ids-targeted chunk means the user is genuinely offline (or
-                            // invisible, which is functionally the same for tracking purposes).
+                            // User absent from this chunk's presences.
+                            // Only act on this for initial discovery (no existing state).
+                            // For known users, do nothing — see comment above.
                             const existing = getCurrentPresence(userId);
                             if (!existing) {
-                                // First time we've seen this target — initialise as offline.
-                                // A real PRESENCE_UPDATE will correct this when they come online.
                                 initPresence(userId, { status: "offline", client_status: null });
                                 log.debug(`First presence init for ${userId}: offline (awaiting PRESENCE_UPDATE)`);
-                            } else if (isActiveStatus(existing.status)) {
-                                // Target was active (online/idle/dnd) but is absent from
-                                // presences in this targeted chunk → they've gone offline.
-                                // Drive through handlePresenceUpdate so the session is closed,
-                                // an event is inserted, and SSE + alert engine are notified.
-                                // Also flush activities so currentActivities doesn't retain
-                                // stale "active" entries after the user goes offline.
-                                log.info(`${userId}: absent from GUILD_MEMBERS_CHUNK presences (was ${existing.status}) — marking offline`);
-                                handlePresenceUpdate(userId, {
-                                    status: "offline",
-                                    client_status: {},
-                                    activities: [],
-                                });
-                                handleActivityUpdate(userId, []);
                             }
-                            // If already offline or unknown: do nothing.
                         }
                     }
                     break;
