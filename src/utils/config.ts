@@ -1,7 +1,11 @@
 import { config as dotenvConfig } from "dotenv";
 import path from "path";
 
-dotenvConfig();
+// In desktop mode, config is injected via process.env by the Electron main process.
+// Skip dotenv so we don't accidentally load a stale .env file.
+if (!process.env.DESKTOP_MODE) {
+    dotenvConfig();
+}
 
 // Normalise legacy / alias mode strings to the canonical set.
 function normaliseDbMode(raw: string): "local" | "local+cloud" | "cloud" {
