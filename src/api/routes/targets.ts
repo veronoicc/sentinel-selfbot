@@ -3,6 +3,7 @@ import { getStmts } from "../../database/queries";
 import { getDb } from "../../database/connection";
 import { config } from "../../utils/config";
 import { startBackfillForTarget } from "../../backfill/backfill-engine";
+import { requestPresenceForUser } from "../../pollers/status-poller";
 
 export function registerTargetRoutes(app: FastifyInstance): void {
     app.get("/api/targets", async () => {
@@ -45,6 +46,11 @@ export function registerTargetRoutes(app: FastifyInstance): void {
         if (config.backfillEnabled) {
             startBackfillForTarget(userId).catch(() => { });
         }
+
+        // Subscribe to presence immediately — delay 5 s to let the profile poller
+        // fetch mutual_guilds first (profile poller fires ~30 s after startup, but
+        // for existing targets mutual_guilds are already in the DB snapshot).
+        setTimeout(() => requestPresenceForUser(userId), 5_000);
 
         return { success: true, userId };
     });

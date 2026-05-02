@@ -26,7 +26,7 @@ import { handleChannelCreate } from "./collectors/dm-detection";
 import { startProfilePoller, stopProfilePoller } from "./pollers/profile-poller";
 import {
     startStatusPoller, stopStatusPoller, setRequestGuildMembersFn,
-    setSelfbotGuildsFn,
+    setSelfbotGuildsFn, setSubscribePresenceFn,
 } from "./pollers/status-poller";
 import { startMutualServersPoller, stopMutualServersPoller } from "./pollers/mutual-servers";
 import { startConnectedAccountsPoller, stopConnectedAccountsPoller } from "./pollers/connected-accounts";
@@ -180,22 +180,29 @@ function requestInitialPresences(client: GatewayClient): void {
 
 // ── Gateway: guild presence subscriptions (op 14) ────────────────────────────
 //
-// Send GUILD_SUBSCRIBE (op 14) for every guild that contains tracked targets.
-// This tells Discord to stream real-time PRESENCE_UPDATE events — including
-// offline transitions — for those guilds.  Must be called after READY and
-// after RESUMED (Discord drops subscriptions when the session is interrupted).
-// Re-called periodically so subscriptions don't silently expire.
+// Send GUILD_SUBSCRIBE (op 14) for every guild that contains tracked targets,
+// including the target user IDs in the `members` field.
+//
+// The `members` field is the critical detail: without it, Discord only pushes
+// PRESENCE_UPDATE for users visible in the member list sidebar, which silently
+// drops offline transitions for most targets. With it, Discord tracks those
+// exact user IDs and delivers every status change — including going offline —
+// in real time, regardless of guild size. This is the event-driven alternative
+// to periodic REQUEST_GUILD_MEMBERS polling.
+//
+// Must be called after READY and after RESUMED (subscriptions are dropped on
+// session interruption). Re-called periodically so they don't silently expire.
 
 let presenceSubscriptionInterval: NodeJS.Timeout | null = null;
 
 function subscribeGuildPresences(client: GatewayClient): void {
-    const stmts = getStmts();
+    const stmts   = getStmts();
     const targets = stmts.getActiveTargets.all() as any[];
     if (!targets.length) return;
 
-    const guildIds = new Set<string>();
+    // Build guild → Set<userId> so each op 14 carries the right member list.
+    const guildMembers = new Map<string, Set<string>>();
 
-    // Collect all mutual guilds from stored profile snapshots
     for (const target of targets) {
         const snapshot = stmts.getLatestSnapshot.get(target.user_id) as any;
         if (!snapshot?.mutual_guilds) continue;
@@ -203,30 +210,40 @@ function subscribeGuildPresences(client: GatewayClient): void {
             const guilds = JSON.parse(snapshot.mutual_guilds) as any[];
             for (const g of guilds) {
                 const id: string | undefined = typeof g === "string" ? g : g.id;
-                if (id) guildIds.add(id);
+                if (!id) continue;
+                const set = guildMembers.get(id) ?? new Set<string>();
+                set.add(target.user_id);
+                guildMembers.set(id, set);
             }
         } catch { /* malformed JSON — skip */ }
     }
 
-    // Fallback: subscribe to all selfbot guilds so targets without a profile
-    // snapshot still get their presence streamed on first connect.
+    // Also subscribe to every selfbot guild so new targets (before their first
+    // profile poll) still get real-time presence via the guild-level stream.
     for (const guild of client.getGuilds()) {
         const id: string | undefined = typeof guild === "string" ? guild : guild.id;
-        if (id) guildIds.add(id);
+        if (!id) continue;
+        if (!guildMembers.has(id)) guildMembers.set(id, new Set<string>());
     }
 
-    if (!guildIds.size) return;
+    if (!guildMembers.size) return;
 
-    // Stagger sends to stay inside the 120 ops/60 s gateway rate limit.
-    const ids = Array.from(guildIds);
+    // Stagger sends to stay within the 120 ops/60 s gateway rate limit.
     const STAGGER_MS = 300;
-    ids.forEach((guildId, i) => {
+    let i = 0;
+    for (const [guildId, memberSet] of guildMembers) {
+        const memberIds = Array.from(memberSet);
+        const delay = i++ * STAGGER_MS;
         setTimeout(() => {
-            if (client.isConnected()) client.subscribeGuildPresence(guildId);
-        }, i * STAGGER_MS);
-    });
+            if (client.isConnected()) client.subscribeGuildPresence(guildId, memberIds);
+        }, delay);
+    }
 
-    log.info(`Subscribed to presence stream for ${ids.length} guild(s) (op 14)`);
+    const targetCount = new Set(targets.map((t: any) => t.user_id)).size;
+    log.info(
+        `Subscribed to presence stream for ${guildMembers.size} guild(s), ` +
+        `tracking ${targetCount} target(s) via op 14 member push`
+    );
 }
 
 // ── Gateway: event handler ────────────────────────────────────────────────────
@@ -452,6 +469,9 @@ function setupGatewayHandlers(client: GatewayClient): void {
 
         setRequestGuildMembersFn((guildId, userIds) =>
             client.requestGuildMembers(guildId, userIds)
+        );
+        setSubscribePresenceFn((guildId, memberIds) =>
+            client.subscribeGuildPresence(guildId, memberIds)
         );
         setSelfbotGuildsFn(() => client.getGuilds());
 

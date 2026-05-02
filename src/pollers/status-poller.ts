@@ -7,6 +7,7 @@ const log = createLogger("StatusPoller");
 
 let intervalHandle: NodeJS.Timeout | null = null;
 let requestGuildMembersFn: ((guildId: string, userIds: string[]) => void) | null = null;
+let subscribePresenceFn:   ((guildId: string, memberIds: string[]) => void) | null = null;
 let selfbotGuildsFn: (() => any[]) | null = null;
 
 export function setRequestGuildMembersFn(
@@ -15,9 +16,65 @@ export function setRequestGuildMembersFn(
     requestGuildMembersFn = fn;
 }
 
+export function setSubscribePresenceFn(
+    fn: (guildId: string, memberIds: string[]) => void
+): void {
+    subscribePresenceFn = fn;
+}
+
 /** Provide a getter for the selfbot's own guild list (from GatewayClient.getGuilds). */
 export function setSelfbotGuildsFn(fn: () => any[]): void {
     selfbotGuildsFn = fn;
+}
+
+/**
+ * Immediately subscribe to presence and request current state for a newly added target.
+ * Called ~5 s after target insert (giving the profile poller time to fetch mutual guilds).
+ *
+ * Sends op 14 with `members: [userId]` for each mutual guild so Discord starts pushing
+ * PRESENCE_UPDATE in real time, then follows up with op 8 REQUEST_GUILD_MEMBERS to get
+ * the target's current status without waiting for the next periodic poll.
+ */
+export function requestPresenceForUser(userId: string): void {
+    const stmts = getStmts();
+    const snapshot = stmts.getLatestSnapshot.get(userId) as any;
+
+    const guilds: string[] = [];
+
+    if (snapshot?.mutual_guilds) {
+        try {
+            const parsed = JSON.parse(snapshot.mutual_guilds) as any[];
+            for (const g of parsed) {
+                const id: string = typeof g === "string" ? g : g.id;
+                if (id) guilds.push(id);
+            }
+        } catch { /* malformed — fall through to selfbot guilds */ }
+    }
+
+    // Fallback: no mutual guild data yet — use all selfbot guilds
+    if (guilds.length === 0) {
+        const selfbotGuilds: any[] = selfbotGuildsFn?.() ?? [];
+        for (const g of selfbotGuilds) {
+            const id: string = typeof g === "string" ? g : g.id;
+            if (id) guilds.push(id);
+        }
+    }
+
+    if (guilds.length === 0) {
+        log.debug(`requestPresenceForUser(${userId}): no guild data available yet`);
+        return;
+    }
+
+    const STAGGER_MS = 300;
+    guilds.forEach((guildId, i) => {
+        const delay = i * STAGGER_MS;
+        setTimeout(() => {
+            if (subscribePresenceFn)   subscribePresenceFn(guildId, [userId]);
+            if (requestGuildMembersFn) requestGuildMembersFn(guildId, [userId]);
+        }, delay);
+    });
+
+    log.info(`requestPresenceForUser(${userId}): subscribing across ${guilds.length} guild(s)`);
 }
 
 /**

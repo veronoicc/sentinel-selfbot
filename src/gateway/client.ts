@@ -234,21 +234,31 @@ export class GatewayClient extends EventEmitter {
     /**
      * Send op 14 (GUILD_SUBSCRIBE) for a guild.
      *
-     * This tells Discord to stream real-time PRESENCE_UPDATE events for that
-     * guild's members, including offline transitions.  Without this, large
-     * guilds (>~100 members) send no presence stream to user-account clients.
+     * Without memberIds: Discord only streams PRESENCE_UPDATE for users
+     * currently visible in the member list sidebar — which excludes most
+     * users in large guilds and never delivers offline transitions for
+     * arbitrary targets.
+     *
+     * With memberIds: Discord tracks those specific user IDs and pushes
+     * PRESENCE_UPDATE for every status change — including going offline —
+     * regardless of guild size or member list position. This is the
+     * event-driven presence tracking approach.
      *
      * activities: true  — receive activity-start/stop updates
      * typing: false     — we handle TYPING_START via intent, not subscription
      * threads: false    — not needed for presence tracking
      */
-    subscribeGuildPresence(guildId: string): void {
-        this.send(GatewayOpcodes.GUILD_SUBSCRIBE, {
+    subscribeGuildPresence(guildId: string, memberIds: string[] = []): void {
+        const payload: Record<string, any> = {
             guild_id:   guildId,
             typing:     false,
             activities: true,
             threads:    false,
-        });
+        };
+        if (memberIds.length > 0) {
+            payload.members = memberIds;
+        }
+        this.send(GatewayOpcodes.GUILD_SUBSCRIBE, payload);
     }
 
     requestGuildMembers(guildId: string, userIds: string[], delayMs = 0): void {
