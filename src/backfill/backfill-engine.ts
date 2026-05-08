@@ -3,27 +3,75 @@ import { getDb } from "../database/connection";
 import { getStmts } from "../database/queries";
 import { config } from "../utils/config";
 import { discordFetch } from "../utils/rate-limiter";
+import { jitterSleep } from "../utils/jitter";
 import { handleMessageCreate } from "../collectors/message";
 import { handleProfileUpdate } from "../collectors/profile";
 
 const log = createLogger("BackfillEngine");
 
-const BACKFILL_DELAY_MS = 500;
-const MAX_CONCURRENT_TARGETS = 3;
-const MAX_CONCURRENT_GUILDS = 2;
+// How long to wait between fetching pages of 100 messages within a single channel.
+// High enough that it doesn't look like automated scraping. Jitter applied on top.
+const BACKFILL_PAGE_DELAY_MS = 2_500;
+
+// How long to wait after finishing one channel before starting the next one
+// within the same guild. Gives Discord's abuse detection nothing to latch onto.
+const INTER_CHANNEL_DELAY_MS = 5_000;
+
+// How long to wait after finishing one guild before starting the next one.
+const INTER_GUILD_DELAY_MS = 20_000;
+
+// Only one target backfill may run at a time. Running multiple concurrently
+// multiplies the request rate, which is the primary trigger for account flags.
+const MAX_CONCURRENT_TARGETS = 1;
 
 // Track which targets are currently being backfilled
 const activeBackfills = new Set<string>();
 
+// Simple FIFO queue — prevents multiple setTimeout chains when several targets
+// request a backfill while one is already running.
+const backfillQueue: string[] = [];
+let queueDraining = false;
+
 // Paused flag per target
 const pausedTargets = new Set<string>();
 
+// ── Queue management ──────────────────────────────────────────────────────────
+
+async function drainQueue(): Promise<void> {
+    if (queueDraining) return;
+    queueDraining = true;
+
+    while (backfillQueue.length > 0) {
+        if (activeBackfills.size >= MAX_CONCURRENT_TARGETS) {
+            // Wait until the active backfill finishes rather than busy-polling.
+            await new Promise<void>(resolve => setTimeout(resolve, 30_000));
+            continue;
+        }
+
+        const targetId = backfillQueue.shift()!;
+        if (activeBackfills.has(targetId)) continue; // already running somehow
+
+        activeBackfills.add(targetId);
+        try {
+            await runBackfillForTarget(targetId);
+        } catch (err: any) {
+            log.error(`Backfill error for ${targetId}: ${err.message}`);
+        } finally {
+            activeBackfills.delete(targetId);
+        }
+
+        // Brief pause between targets so there's no immediate burst when the
+        // queue has multiple entries (e.g. startup with several new targets).
+        if (backfillQueue.length > 0) {
+            await jitterSleep(INTER_GUILD_DELAY_MS, 30);
+        }
+    }
+
+    queueDraining = false;
+}
+
 // ── Profile fetch helper ──────────────────────────────────────────────────────
 
-/**
- * Fetches the target's Discord profile and stores it via handleProfileUpdate.
- * Returns the mutual_guilds array, or null if the fetch fails.
- */
 async function fetchAndStoreProfile(targetId: string): Promise<any[] | null> {
     log.info(`Fetching Discord profile for ${targetId}`);
     try {
@@ -42,7 +90,6 @@ async function fetchAndStoreProfile(targetId: string): Promise<any[] | null> {
                 const basicRes = await discordFetch(`/users/${targetId}`, config.discordToken);
                 if (basicRes.ok) {
                     const basicData = await basicRes.json() as any;
-                    // undefined for optional params → profile.ts preserves existing mutual_guilds
                     handleProfileUpdate(targetId, basicData, undefined, undefined, undefined);
                 } else {
                     log.warn(`Failed to fetch basic user info for ${targetId}: ${basicRes.status}`);
@@ -164,7 +211,9 @@ async function processChannel(
                 break;
             }
 
-            await new Promise(resolve => setTimeout(resolve, BACKFILL_DELAY_MS));
+            // Wait between pages — this is the main loop that hammers the API,
+            // so a generous delay with jitter is critical for avoiding flags.
+            await jitterSleep(BACKFILL_PAGE_DELAY_MS, 30);
         }
 
         stmts.updateBackfillProgress.run(
@@ -208,10 +257,17 @@ async function processGuild(targetId: string, guildId: string): Promise<void> {
 
         log.debug(`Guild ${guildId}: queued ${textChannels.length} channels for ${targetId}`);
 
-        // Process channels sequentially
-        for (const ch of textChannels) {
+        // Process channels sequentially with a delay between each.
+        // Concurrent channel reads are the pattern that looks most like a
+        // scraper — sequential reads with pauses look like a human scrolling.
+        for (let i = 0; i < textChannels.length; i++) {
             if (pausedTargets.has(targetId)) break;
-            await processChannel(targetId, ch.id, guildId);
+            await processChannel(targetId, textChannels[i].id, guildId);
+
+            // Pause between channels (skip after the last one)
+            if (i < textChannels.length - 1 && !pausedTargets.has(targetId)) {
+                await jitterSleep(INTER_CHANNEL_DELAY_MS, 30);
+            }
         }
 
     } catch (err: any) {
@@ -219,18 +275,68 @@ async function processGuild(targetId: string, guildId: string): Promise<void> {
     }
 }
 
-// ── Target backfill ───────────────────────────────────────────────────────────
+// ── Core backfill runner (used by both queue and custom) ──────────────────────
+
+async function runBackfillForTarget(targetId: string): Promise<void> {
+    log.info(`Starting backfill for ${targetId}`);
+
+    const stmts = getStmts();
+
+    // Try to get mutual guilds from the latest profile snapshot
+    let mutualGuilds: any[] = [];
+    const snapshot = stmts.getLatestSnapshot.get(targetId) as any;
+
+    if (snapshot?.mutual_guilds) {
+        try { mutualGuilds = JSON.parse(snapshot.mutual_guilds); } catch { }
+    }
+
+    // No snapshot or snapshot has no mutual guilds — fetch profile inline
+    if (!mutualGuilds.length) {
+        const fetched = await fetchAndStoreProfile(targetId);
+        if (fetched === null) {
+            log.warn(`Could not obtain profile for ${targetId}, skipping backfill`);
+            return;
+        }
+        mutualGuilds = fetched;
+    }
+
+    if (!mutualGuilds.length) {
+        log.info(`No mutual guilds found for ${targetId} — selfbot shares no servers with this user. Backfill skipped.`);
+        return;
+    }
+
+    const guildIds = mutualGuilds
+        .map((g: any) => (typeof g === "string" ? g : g.id))
+        .filter(Boolean) as string[];
+
+    if (!guildIds.length) {
+        log.warn(`No valid guild IDs extracted for ${targetId}`);
+        return;
+    }
+
+    log.info(`Backfilling ${targetId} across ${guildIds.length} mutual guild(s) — sequential, one at a time`);
+
+    // Process guilds one at a time. Concurrent guild reads multiply the request
+    // rate and are a reliable trigger for Discord's automation detection.
+    for (let i = 0; i < guildIds.length; i++) {
+        if (pausedTargets.has(targetId)) break;
+        await processGuild(targetId, guildIds[i]);
+
+        // Pause between guilds (skip after the last one)
+        if (i < guildIds.length - 1 && !pausedTargets.has(targetId)) {
+            log.debug(`Waiting ${INTER_GUILD_DELAY_MS}ms before next guild for ${targetId}`);
+            await jitterSleep(INTER_GUILD_DELAY_MS, 30);
+        }
+    }
+
+    log.info(`Backfill complete for ${targetId}`);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 export async function startBackfillForTarget(targetId: string): Promise<void> {
     if (!config.backfillEnabled) {
         log.debug(`Backfill disabled, skipping ${targetId}`);
-        return;
-    }
-
-    if (activeBackfills.size >= MAX_CONCURRENT_TARGETS) {
-        log.warn(`Max concurrent backfills reached, queuing ${targetId}`);
-        // Simple queue: retry after 60s
-        setTimeout(() => startBackfillForTarget(targetId), 60_000);
         return;
     }
 
@@ -239,61 +345,13 @@ export async function startBackfillForTarget(targetId: string): Promise<void> {
         return;
     }
 
-    activeBackfills.add(targetId);
-    log.info(`Starting backfill for ${targetId}`);
-
-    try {
-        const stmts = getStmts();
-
-        // Try to get mutual guilds from the latest profile snapshot
-        let mutualGuilds: any[] = [];
-        const snapshot = stmts.getLatestSnapshot.get(targetId) as any;
-
-        if (snapshot?.mutual_guilds) {
-            // Snapshot exists — parse it
-            try { mutualGuilds = JSON.parse(snapshot.mutual_guilds); } catch { }
-        }
-
-        // No snapshot or snapshot has no mutual guilds — fetch profile inline
-        if (!mutualGuilds.length) {
-            const fetched = await fetchAndStoreProfile(targetId);
-            if (fetched === null) {
-                log.warn(`Could not obtain profile for ${targetId}, skipping backfill`);
-                return;
-            }
-            mutualGuilds = fetched;
-        }
-
-        if (!mutualGuilds.length) {
-            log.info(`No mutual guilds found for ${targetId} — selfbot shares no servers with this user. Backfill skipped.`);
-            return;
-        }
-
-        const guildIds = mutualGuilds
-            .map((g: any) => (typeof g === "string" ? g : g.id))
-            .filter(Boolean) as string[];
-
-        if (!guildIds.length) {
-            log.warn(`No valid guild IDs extracted for ${targetId}`);
-            return;
-        }
-
-        log.info(`Backfilling ${targetId} across ${guildIds.length} mutual guild(s)`);
-
-        // Process guilds concurrently (max 2 at once)
-        for (let i = 0; i < guildIds.length; i += MAX_CONCURRENT_GUILDS) {
-            if (pausedTargets.has(targetId)) break;
-            const batch = guildIds.slice(i, i + MAX_CONCURRENT_GUILDS);
-            await Promise.all(batch.map((gid: string) => processGuild(targetId, gid)));
-        }
-
-        log.info(`Backfill complete for ${targetId}`);
-
-    } catch (err: any) {
-        log.error(`Backfill error for ${targetId}: ${err.message}`);
-    } finally {
-        activeBackfills.delete(targetId);
+    if (backfillQueue.includes(targetId)) {
+        log.debug(`Backfill already queued for ${targetId}`);
+        return;
     }
+
+    backfillQueue.push(targetId);
+    drainQueue(); // fire-and-forget; drainQueue is reentrant-safe
 }
 
 // ── Custom / forced backfill ──────────────────────────────────────────────────
@@ -324,6 +382,11 @@ export async function customBackfillForTarget(
     if (activeBackfills.has(targetId)) {
         log.warn(`Backfill already running for ${targetId} — cannot start custom job`);
         throw new Error("A backfill is already running for this target");
+    }
+
+    if (backfillQueue.includes(targetId)) {
+        log.warn(`Backfill already queued for ${targetId} — cannot start custom job`);
+        throw new Error("A backfill is already queued for this target");
     }
 
     resumeBackfill(targetId);
@@ -364,21 +427,28 @@ export async function customBackfillForTarget(
             }
 
             log.info(`new_channels: ${newGuildIds.length} new guild(s) for ${targetId}: ${newGuildIds.join(", ")}`);
-            // Only process the new guilds — existing completed channels are untouched.
-            for (let i = 0; i < newGuildIds.length; i += MAX_CONCURRENT_GUILDS) {
+
+            for (let i = 0; i < newGuildIds.length; i++) {
                 if (pausedTargets.has(targetId)) break;
-                const batch = newGuildIds.slice(i, i + MAX_CONCURRENT_GUILDS);
-                await Promise.all(batch.map((gid: string) => processGuild(targetId, gid)));
+                await processGuild(targetId, newGuildIds[i]);
+
+                if (i < newGuildIds.length - 1 && !pausedTargets.has(targetId)) {
+                    await jitterSleep(INTER_GUILD_DELAY_MS, 30);
+                }
             }
             log.info(`Custom backfill (new_channels) complete for ${targetId}`);
             return;
         }
 
-        // full_reset path: process every guild.
-        for (let i = 0; i < allGuildIds.length; i += MAX_CONCURRENT_GUILDS) {
+        // full_reset path: process every guild sequentially.
+        for (let i = 0; i < allGuildIds.length; i++) {
             if (pausedTargets.has(targetId)) break;
-            const batch = allGuildIds.slice(i, i + MAX_CONCURRENT_GUILDS);
-            await Promise.all(batch.map((gid: string) => processGuild(targetId, gid)));
+            await processGuild(targetId, allGuildIds[i]);
+
+            if (i < allGuildIds.length - 1 && !pausedTargets.has(targetId)) {
+                log.debug(`full_reset: waiting ${INTER_GUILD_DELAY_MS}ms before next guild for ${targetId}`);
+                await jitterSleep(INTER_GUILD_DELAY_MS, 30);
+            }
         }
 
         log.info(`Custom backfill (full_reset) complete for ${targetId}`);
@@ -399,16 +469,25 @@ export async function startBackfillOnStartup(): Promise<void> {
     const stmts = getStmts();
     const targets = stmts.getActiveTargets.all() as any[];
 
-    for (const target of targets) {
+    // Stagger startup backfills so they don't all queue up and fire in a burst.
+    // Each target is scheduled 3 minutes apart — the queue still serialises them,
+    // but the stagger means we don't enqueue 10 targets in one tick.
+    const STARTUP_STAGGER_MS = 3 * 60_000;
+
+    targets.forEach((target, index) => {
         const row = stmts.hasBackfillData.get(target.user_id) as any;
         if (!row || row.count === 0) {
-            log.info(`Target ${target.user_id} has no backfill data — starting backfill`);
-            // Don't await — fire and forget for startup
-            startBackfillForTarget(target.user_id).catch(err =>
-                log.error(`Startup backfill error for ${target.user_id}: ${err.message}`)
+            const delay = index * STARTUP_STAGGER_MS;
+            log.info(
+                `Target ${target.user_id} has no backfill data — scheduling backfill in ${delay / 1000}s`
             );
+            setTimeout(() => {
+                startBackfillForTarget(target.user_id).catch(err =>
+                    log.error(`Startup backfill error for ${target.user_id}: ${err.message}`)
+                );
+            }, delay);
         }
-    }
+    });
 }
 
 // ── Pause / resume ────────────────────────────────────────────────────────────

@@ -6,6 +6,17 @@ const log = createLogger("RateLimiter");
 
 let discordAuthFailedNotified = false;
 
+// Minimum wall-clock gap between any two outbound Discord REST requests.
+// This acts as a safety floor independent of bucket state — even if buckets
+// say we have remaining capacity, firing back-to-back requests at full speed
+// looks like automation to Discord's abuse detection. 400 ms ± 30% jitter.
+const MIN_REQUEST_INTERVAL_MS = 400;
+
+// Extra safety buffer added on top of Discord's retry_after value.
+// We wait retry_after × (1 + RETRY_AFTER_BUFFER) so we don't immediately
+// re-trigger the limit the moment the window resets.
+const RETRY_AFTER_BUFFER = 0.25;
+
 interface RateLimitBucket {
     remaining: number;
     resetAt: number;
@@ -15,6 +26,7 @@ interface RateLimitBucket {
 export class RateLimiter {
     private buckets: Map<string, RateLimitBucket> = new Map();
     private globalResetAt = 0;
+    private lastRequestAt = 0;
 
     async waitForBucket(route: string): Promise<void> {
         const now = Date.now();
@@ -27,12 +39,22 @@ export class RateLimiter {
 
         const bucket = this.buckets.get(route);
         if (bucket) {
-            if (bucket.remaining <= 1 && bucket.resetAt > now) {
-                const wait = bucket.resetAt - now + 100;
+            if (bucket.remaining <= 1 && bucket.resetAt > Date.now()) {
+                const wait = bucket.resetAt - Date.now() + 100;
                 log.debug(`Rate limit bucket ${route}: waiting ${wait}ms`);
                 await this.sleep(wait);
             }
         }
+
+        // Enforce minimum inter-request gap — add ±30% jitter so requests
+        // don't arrive at perfectly predictable intervals.
+        const sinceLastRequest = Date.now() - this.lastRequestAt;
+        const jitter = (Math.random() * 0.6 - 0.3) * MIN_REQUEST_INTERVAL_MS;
+        const minGap = Math.max(100, MIN_REQUEST_INTERVAL_MS + jitter);
+        if (sinceLastRequest < minGap) {
+            await this.sleep(minGap - sinceLastRequest);
+        }
+        this.lastRequestAt = Date.now();
     }
 
     updateFromHeaders(route: string, headers: Record<string, string>): void {
@@ -54,8 +76,9 @@ export class RateLimiter {
     }
 
     handleRetryAfter(retryAfterMs: number, isGlobal: boolean): void {
+        const buffered = retryAfterMs * (1 + RETRY_AFTER_BUFFER);
         if (isGlobal) {
-            this.globalResetAt = Date.now() + retryAfterMs;
+            this.globalResetAt = Date.now() + buffered;
         }
     }
 
@@ -98,9 +121,10 @@ export async function discordFetch(
 
         if (res.status === 429) {
             const body = await res.json() as { retry_after: number; global?: boolean };
-            const retryMs = body.retry_after * 1000;
+            // Buffer the retry_after so we don't immediately re-trigger the limit.
+            const retryMs = Math.ceil(body.retry_after * 1000 * (1 + RETRY_AFTER_BUFFER));
             log.warn(`429 on ${route} (attempt ${attempt + 1}/${MAX_RETRIES}), retrying after ${retryMs}ms`);
-            rateLimiter.handleRetryAfter(retryMs, !!body.global);
+            rateLimiter.handleRetryAfter(body.retry_after * 1000, !!body.global);
             await new Promise(resolve => setTimeout(resolve, retryMs));
             continue;
         }

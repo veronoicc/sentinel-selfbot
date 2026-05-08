@@ -5,6 +5,13 @@ import { config } from "../../utils/config";
 import { startBackfillForTarget } from "../../backfill/backfill-engine";
 import { requestPresenceForUser } from "../../pollers/status-poller";
 
+// How long to wait after adding a target before kicking off the backfill.
+// Adding a target already triggers a profile fetch for mutual guilds — doing
+// the full channel sweep immediately on top of that is a burst that Discord's
+// abuse detection reliably flags. Waiting 90 seconds lets the profile request
+// settle and makes the subsequent backfill look like a delayed user action.
+const BACKFILL_START_DELAY_MS = 90_000;
+
 export function registerTargetRoutes(app: FastifyInstance): void {
     app.get("/api/targets", async () => {
         const stmts = getStmts();
@@ -44,7 +51,12 @@ export function registerTargetRoutes(app: FastifyInstance): void {
         stmts.insertTarget.run(userId, Date.now(), label || null, notes || null, priorityVal, 1);
 
         if (config.backfillEnabled) {
-            startBackfillForTarget(userId).catch(() => { });
+            // Delay the backfill start so the profile fetch triggered by the
+            // presence subscription has time to complete first, and so there
+            // is no immediate burst of API calls right after target creation.
+            setTimeout(() => {
+                startBackfillForTarget(userId).catch(() => { });
+            }, BACKFILL_START_DELAY_MS);
         }
 
         // Subscribe to presence immediately — delay 5 s to let the profile poller
