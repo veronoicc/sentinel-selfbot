@@ -4,6 +4,7 @@ import { getDb } from "../../database/connection";
 import { config } from "../../utils/config";
 import { startBackfillForTarget } from "../../backfill/backfill-engine";
 import { requestPresenceForUser } from "../../pollers/status-poller";
+import { parseTimezone } from "../../utils/timezone";
 
 // How long to wait after adding a target before kicking off the backfill.
 // Adding a target already triggers a profile fetch for mutual guilds — doing
@@ -75,7 +76,7 @@ export function registerTargetRoutes(app: FastifyInstance): void {
 
     app.patch<{
         Params: { userId: string };
-        Body: { label?: string | null; notes?: string | null; priority?: number; active?: boolean };
+        Body: { label?: string | null; notes?: string | null; priority?: number; active?: boolean; timezone?: string | null };
     }>("/api/targets/:userId", async (req, reply) => {
         const db = getDb();
         const body = req.body;
@@ -105,6 +106,19 @@ export function registerTargetRoutes(app: FastifyInstance): void {
         if ("active" in body && body.active !== undefined) {
             setParts.push("active = ?");
             params.push(body.active ? 1 : 0);
+        }
+        if ("timezone" in body) {
+            if (body.timezone === null || body.timezone === "") {
+                setParts.push("timezone = ?");
+                params.push(null);
+            } else {
+                const parsed = parseTimezone(body.timezone!);
+                if (!parsed) {
+                    return reply.code(400).send({ error: `Unrecognized timezone: "${body.timezone}"` });
+                }
+                setParts.push("timezone = ?");
+                params.push(parsed.canonical);
+            }
         }
 
         if (setParts.length > 0) {

@@ -129,6 +129,15 @@ function applyMigration(version: number): void {
             break;
         }
 
+        case 6: {
+            const db = getDb();
+            try {
+                db.exec("ALTER TABLE targets ADD COLUMN timezone TEXT");
+            } catch { /* column may already exist */ }
+            log.info("Migration v6: targets.timezone column added");
+            break;
+        }
+
         default:
             break;
     }
