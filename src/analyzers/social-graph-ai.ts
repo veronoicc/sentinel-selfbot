@@ -283,7 +283,7 @@ async function analyzeAllRelationships(targetId: string): Promise<void> {
             if (confidence >= 0.2 && ai.isAvailable()) {
                 try {
                     const prompt = relationshipClassificationPrompt(features);
-                    const raw = await ai.complete(SYSTEM_PROMPT, prompt, 512);
+                    const raw = await ai.complete(SYSTEM_PROMPT, prompt);
                     const parsed = parseLLMClassification(raw);
                     classification = parsed.classification;
                     reasoning = parsed.reasoning;
