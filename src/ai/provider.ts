@@ -15,7 +15,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export interface AIProvider {
-    complete(systemPrompt: string, userPrompt: string, maxTokens?: number): Promise<string>;
+    complete(systemPrompt: string, userPrompt: string): Promise<string>;
     isAvailable(): boolean;
 }
 
@@ -29,7 +29,7 @@ export class NullProvider implements AIProvider {
 export class OpenAICompatibleProvider implements AIProvider {
     isAvailable() { return true; }
 
-    async complete(systemPrompt: string, userPrompt: string, maxTokens = 2048): Promise<string> {
+    async complete(systemPrompt: string, userPrompt: string): Promise<string> {
         const baseUrl = config.aiBaseUrl.replace(/\/$/, "");
         const body = JSON.stringify({
             model: config.aiModel,
@@ -37,7 +37,6 @@ export class OpenAICompatibleProvider implements AIProvider {
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt },
             ],
-            max_tokens: maxTokens,
             stream: false,
         });
 
@@ -79,10 +78,9 @@ export class OpenAICompatibleProvider implements AIProvider {
 export class AnthropicProvider implements AIProvider {
     isAvailable() { return true; }
 
-    async complete(systemPrompt: string, userPrompt: string, maxTokens = 2048): Promise<string> {
+    async complete(systemPrompt: string, userPrompt: string): Promise<string> {
         const body = JSON.stringify({
             model: config.aiModel,
-            max_tokens: maxTokens,
             system: systemPrompt,
             messages: [{ role: "user", content: userPrompt }],
         });
@@ -185,7 +183,7 @@ export class GeminiProvider implements AIProvider {
 
     isAvailable() { return true; }
 
-    async complete(systemPrompt: string, userPrompt: string, maxTokens = 2048): Promise<string> {
+    async complete(systemPrompt: string, userPrompt: string): Promise<string> {
         const model = config.aiModel || "gemini-2.0-flash";
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.aiApiKey}`;
 
@@ -277,9 +275,6 @@ export class GeminiProvider implements AIProvider {
             }
 
             const finishReason: string | undefined = data?.candidates?.[0]?.finishReason;
-            if (finishReason === "MAX_TOKENS") {
-                throw new Error(`Gemini response truncated (MAX_TOKENS) — increase maxTokens`);
-            }
             
             return content.trim();
         }
