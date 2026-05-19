@@ -29,7 +29,7 @@ export class NullProvider implements AIProvider {
 export class OpenAICompatibleProvider implements AIProvider {
     isAvailable() { return true; }
 
-    async complete(systemPrompt: string, userPrompt: string, maxTokens = 512): Promise<string> {
+    async complete(systemPrompt: string, userPrompt: string, maxTokens = 2048): Promise<string> {
         const baseUrl = config.aiBaseUrl.replace(/\/$/, "");
         const body = JSON.stringify({
             model: config.aiModel,
@@ -79,7 +79,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 export class AnthropicProvider implements AIProvider {
     isAvailable() { return true; }
 
-    async complete(systemPrompt: string, userPrompt: string, maxTokens = 512): Promise<string> {
+    async complete(systemPrompt: string, userPrompt: string, maxTokens = 2048): Promise<string> {
         const body = JSON.stringify({
             model: config.aiModel,
             max_tokens: maxTokens,
@@ -185,7 +185,7 @@ export class GeminiProvider implements AIProvider {
 
     isAvailable() { return true; }
 
-    async complete(systemPrompt: string, userPrompt: string, maxTokens = 512): Promise<string> {
+    async complete(systemPrompt: string, userPrompt: string, maxTokens = 2048): Promise<string> {
         const model = config.aiModel || "gemini-2.0-flash";
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.aiApiKey}`;
 
