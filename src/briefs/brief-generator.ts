@@ -235,8 +235,7 @@ async function generateBrief(targetId: string, dateStr: string): Promise<void> {
                 const prompt = dailyBriefNarrativePrompt(stats);
                 aiNarrative = await ai.complete(
                     "You are a neutral intelligence analyst writing brief daily summaries.",
-                    prompt,
-                    256
+                    prompt
                 );
                 // Clamp to 3 sentences
                 const sentences = aiNarrative.split(/(?<=[.!?])\s+/);
